@@ -3,30 +3,47 @@
 A high-level, non-committal roadmap for open-security-platform. Each component
 has its own detailed `NEXT_STEPS.md`.
 
+## Done
+
+- **Monorepo + tooling:** 16 components consolidated with a fan-out `Makefile`,
+  `go.work`, npm workspaces, per-language CI matrix, mkdocs docs, governance docs.
+- **Platform backbone (Phase 1):** shared `platform/audit` (hash-chained audit),
+  `platform/auth` (OIDC/JWT HS256, Go/Python/Node), `platform/rbac` (roles/scopes/
+  multi-tenancy), `platform/telemetry` (Noop/InMemory/OTLP), `platform/events`
+  (Go integration-event emitter), and a persistence convention + repository
+  interface (`open-soar` pilot).
+- **Integration spine (Phase 2):** orchestrated end-to-end flow + a **native
+  webhook spine** (`integration/`): components emit/consume `IntegrationEvent`s
+  directly (`ai-redteam-platform → pentest-manager → ai-compliance-hub`, plus
+  `open-pam-jit` `access.granted` and `agent-sandbox` `action.executed`), with a
+  subscription/registry broker for dynamic routing. Cross-language hash chaining.
+- **Phase 3 connectors (Mock + Real):** LLM providers (OpenAI/Anthropic/Ollama),
+  DefectDojo, Wazuh/OpenCTI/Cortex, OpenBao, Presidio redaction, pgvector, real
+  MCP Streamable-HTTP transport, Garak/promptfoo engine adapters.
+- **Phase 4 breadth:** SARIF/Nuclei importers, SIEM webhook ingestion, ATT&CK→Sigma
+  mapping, OSCAL import/export, BloodHound/Prowler graph importers.
+
 ## Now
 
-- Consolidate the 16 components into this monorepo with shared tooling and CI.
-- Stabilize each component's MVP API and test suite.
+- **Enforce the backbone in-component:** adopt the repository interfaces, OIDC/RBAC
+  middleware, and telemetry across the remaining components; add Postgres backends.
+- **Exercise Real connector paths** against local instances (docker-compose) of
+  Keycloak/Wazuh/DefectDojo/OpenBao; confirm the Mock↔Real seam end to end.
 - Publish per-component documentation in the aggregated docs site.
 
 ## Next
 
-- **Cross-component integration:** wire `ai-redteam-platform` ↔ `ai-redteam-evals`
-  ↔ `agent-redteam-range`; export findings to `pentest-manager`; align technique
-  mapping with `purple-team`; feed evidence to `ai-compliance-hub`.
-- **Real integrations:** model providers, SIEM/EDR, cloud IAM, vector DBs, MCP
-  transports, SSH/DB/cloud targets for `open-pam-jit`.
-- **Hardening:** replace regex detectors with ML classifiers; real sandboxing
-  (gVisor/Firecracker); authenticated APIs and RBAC.
+- **Hardening:** replace regex detectors with ML classifiers (Llama Guard/NeMo/
+  Presidio); real sandboxing (gVisor/Firecracker); stdio MCP transport.
+- **Attack path expansion:** cloud IAM and Active Directory ingestion (BloodHound)
+  for `attack-path`; probabilistic path scoring; what-if simulation.
+- **Continuous validation:** schedule safe tests in CI/CD; detection-coverage
+  trends; AI purple teaming.
 
 ## Later
 
-- **Attack path expansion:** cloud IAM and Active Directory ingestion for
-  `attack-path`; probabilistic path scoring; what-if simulation.
-- **Continuous validation:** schedule safe tests in CI/CD; detection-coverage
-  trends; AI purple teaming.
-- **Platform concerns:** web UIs, Postgres backends, multi-tenancy, packaging
-  (Helm, images), and a unified release process.
+- **Platform concerns:** web UIs, multi-tenancy enforcement, packaging (Helm,
+  images), and a unified release process; hosted control plane (separate repo).
 
 ## Contributing to the roadmap
 
