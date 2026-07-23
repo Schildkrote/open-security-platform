@@ -1,10 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { openDB, type DB } from "./db.ts";
-import { Gateway } from "./gateway.ts";
+import { Gateway, type GatewayOptions } from "./gateway.ts";
 import { PolicyEngine } from "./policy.ts";
 import * as registry from "./registry.ts";
 import { setSecret } from "./secrets.ts";
 import * as audit from "./audit.ts";
+import { HttpTransport, makeExecutor } from "./transport.ts";
 import type { JsonRpcRequest } from "./jsonrpc.ts";
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -66,10 +67,19 @@ export function buildHandler(db: DB, gateway: Gateway) {
 const isMain = process.argv[1]?.endsWith("server.ts");
 if (isMain) {
   const db = openDB(process.env.DB_PATH ?? ":memory:");
-  const gateway = new Gateway(db, defaultPolicy, {
+  const options: GatewayOptions = {
     allowedDomains: (process.env.ALLOWED_DOMAINS ?? "").split(",").filter(Boolean),
     requireAuth: process.env.REQUIRE_AUTH === "1",
-  });
+  };
+  // Phase 3: real MCP transport. MCP_TRANSPORT=http forwards tools/call to each
+  // server's registered endpoint; unset = the offline mock executor.
+  if (process.env.MCP_TRANSPORT === "http") {
+    options.executor = makeExecutor(
+      new HttpTransport(),
+      (tool) => registry.getServer(db, tool.server_id)?.endpoint ?? null,
+    );
+  }
+  const gateway = new Gateway(db, defaultPolicy, options);
   const port = Number(process.env.PORT ?? 8084);
   createServer(buildHandler(db, gateway)).listen(port, () =>
     console.log(`mcp-security-gateway listening on :${port}`),
