@@ -12,6 +12,7 @@ import (
 	"github.com/Schildkrote/open-pam-jit/internal/api"
 	"github.com/Schildkrote/open-pam-jit/internal/audit"
 	"github.com/Schildkrote/open-pam-jit/internal/vault"
+	"github.com/Schildkrote/platform/auth"
 	"github.com/Schildkrote/platform/events"
 )
 
@@ -20,6 +21,7 @@ func main() {
 	passphrase := flag.String("passphrase", "change-me", "vault master passphrase")
 	auditFile := flag.String("audit", "audit.jsonl", "audit log file")
 	webhooks := flag.String("webhooks", "", "comma-separated integration webhook URLs (opt-in)")
+	authSecret := flag.String("auth-secret", "", "shared JWT secret; when set, protects all API routes except /healthz (opt-in)")
 	flag.Parse()
 
 	// NOTE: a real deployment uses a random salt stored in a KMS/HSM.
@@ -46,8 +48,24 @@ func main() {
 	}
 
 	srv := &api.Server{Mgr: mgr, Audit: auditLogger, Events: emitter}
+	routes := srv.Routes()
+
+	// Opt-in shared OIDC/JWT auth (Phase 1). Empty secret = open (offline default);
+	// /healthz stays open for liveness probes either way.
+	var handler http.Handler = routes
+	if *authSecret != "" {
+		protected := auth.Middleware(*authSecret, "pam:access", routes)
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/healthz" {
+				routes.ServeHTTP(w, r)
+				return
+			}
+			protected.ServeHTTP(w, r)
+		})
+	}
+
 	log.Printf("open-pam-jit listening on %s", *listen)
-	log.Fatal(http.ListenAndServe(*listen, srv.Routes()))
+	log.Fatal(http.ListenAndServe(*listen, handler))
 }
 
 func splitCSV(s string) []string {
