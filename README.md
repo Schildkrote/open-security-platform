@@ -31,6 +31,17 @@ targets; findings flow to `pentest-manager`; technique mapping aligns with
 `purple-team`; evidence is compatible with `ai-compliance-hub`; privileged
 actions can be brokered through `open-pam-jit` and run inside `agent-sandbox`.
 
+### Shared platform layer
+
+- [`platform/`](platform/) — the shared core: `audit` (tamper-evident hash-chained
+  audit), `auth` (OIDC/JWT, Go/Python/Node), `rbac` (roles/scopes/multi-tenancy),
+  `events` (integration-event emitter), `telemetry` (metrics/spans), a persistence
+  convention, and the common event/audit JSON schemas.
+- [`integration/`](integration/) — the integration control plane: an orchestrated
+  end-to-end flow plus a **native webhook spine** where components emit/consume
+  `IntegrationEvent`s directly, with a subscription/registry broker. Run it with
+  `make integration`.
+
 ## Portfolios
 
 ### identity/ — human, machine, and agent identity
@@ -91,12 +102,17 @@ Run an individual component from its directory (see its README), e.g.:
 ## Repository layout
 
 - `<portfolio>/<component>/` — each component is self-contained.
-- `Makefile` — fan-out orchestration across languages.
+- `platform/` — shared core (audit, auth, rbac, events, telemetry, persistence,
+  schemas). See [`platform/README.md`](platform/README.md).
+- `integration/` — integration control plane + native webhook spine + e2e tests.
+  See [`integration/README.md`](integration/README.md).
+- `Makefile` — fan-out orchestration across languages (`make verify`,
+  `make integration`).
 - `go.work` — Go workspace tying the Go modules (module paths are unchanged).
 - `package.json` — npm workspaces for the Node/TS components.
 - `docs/` + `mkdocs.yml` — aggregated documentation site.
 - `deploy/` — aggregate Docker Compose for the containerized components.
-- `.github/` — CI (per-language test matrix), lint, docs, security scan.
+- `.github/` — CI (per-language test matrix + integration job), lint, docs, scan.
 
 ## Safety & acceptable use
 
