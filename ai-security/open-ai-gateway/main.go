@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 
 	"github.com/Schildkrote/open-ai-gateway/internal/audit"
 	"github.com/Schildkrote/open-ai-gateway/internal/config"
@@ -15,6 +16,7 @@ import (
 	"github.com/Schildkrote/open-ai-gateway/internal/proxy"
 	"github.com/Schildkrote/open-ai-gateway/internal/ratelimit"
 	"github.com/Schildkrote/open-ai-gateway/internal/registry"
+	"github.com/Schildkrote/platform/auth"
 )
 
 func main() {
@@ -63,7 +65,7 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.HandleFunc("/admin/tools", func(w http.ResponseWriter, r *http.Request) {
+	adminTools := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			_ = json.NewEncoder(w).Encode(reg.List())
@@ -79,6 +81,9 @@ func main() {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	// Opt-in shared OIDC/JWT auth (Phase 1): set OSP_AUTH_SECRET to protect the
+	// admin API. Empty secret = open (offline default).
+	mux.Handle("/admin/tools", auth.Middleware(os.Getenv("OSP_AUTH_SECRET"), "gateway:admin", adminTools))
 
 	log.Printf("open-ai-gateway listening on %s (upstream=%s)", cfg.Listen, cfg.UpstreamURL)
 	log.Fatal(http.ListenAndServe(cfg.Listen, mux))

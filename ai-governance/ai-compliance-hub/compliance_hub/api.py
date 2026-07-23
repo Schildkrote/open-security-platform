@@ -2,15 +2,21 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from . import cards, controls, evidence, models, webhook
+from . import auth, cards, controls, evidence, models, webhook
 
 
 def make_handler(conn: sqlite3.Connection) -> type[BaseHTTPRequestHandler]:
+    # Opt-in shared OIDC/JWT auth (Phase 1): set OSP_AUTH_SECRET to protect the
+    # write API. Empty = open (offline default). /webhook stays open for the
+    # native component-to-component spine.
+    auth_secret = os.environ.get("OSP_AUTH_SECRET", "")
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args: Any) -> None:  # silence default logging
             pass
@@ -61,6 +67,8 @@ def make_handler(conn: sqlite3.Connection) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?")[0]
+            if path != "/webhook" and not auth.authorized(self.headers, auth_secret):
+                return self._send(401, {"error": "unauthorized"})
             body = self._body()
             try:
                 if path == "/systems":
