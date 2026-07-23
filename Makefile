@@ -5,7 +5,7 @@ GO_DIRS   := platform identity/oiaf identity/open-pam-jit ai-security/open-ai-ga
 NODE_DIRS := identity/agent-identity ai-security/ai-access-broker ai-security/mcp-security-gateway offensive/pentest-manager soc/open-soar
 PY_DIRS   := ai-security/rag-authorization ai-security/agent-sandbox ai-governance/ai-compliance-hub ai-governance/ai-redteam-evals ai-governance/ai-redteam-platform offensive/purple-team offensive/agent-redteam-range
 
-.PHONY: help test test-go test-node test-python build build-go lint fmt verify docs clean list
+.PHONY: help test test-go test-node test-python build build-go lint fmt verify integration docs clean list
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -41,6 +41,9 @@ fmt: ## Format Go code
 	@gofmt -w $(GO_DIRS)
 
 verify: lint test ## Lint then test everything
+
+integration: ## Run the end-to-end cross-component flow (needs go + node + python)
+	@python3 -m unittest -v integration.tests.test_e2e
 
 docs: ## Serve the docs site with mkdocs (if installed)
 	@command -v mkdocs >/dev/null 2>&1 && mkdocs serve || echo "mkdocs not installed (pip install mkdocs)"
