@@ -1,14 +1,14 @@
-// Package audit writes tamper-evident JSONL audit records.
+// Package audit writes tamper-evident JSONL audit records for open-ai-gateway.
+// The chaining/hashing/serialization engine is shared via platform/audit; this
+// package supplies the gateway-specific record type and Log/OpenFile API.
 package audit
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"io"
 	"os"
-	"sync"
 	"time"
+
+	platformaudit "github.com/Schildkrote/platform/audit"
 )
 
 // Event is a single audited gateway decision.
@@ -26,16 +26,14 @@ type Event struct {
 	Hash       string         `json:"hash"`
 }
 
-// Logger appends hash-chained events to a writer.
+// Logger appends hash-chained events using the shared chain engine.
 type Logger struct {
-	mu       sync.Mutex
-	w        io.Writer
-	prevHash string
+	chain *platformaudit.Chain
 }
 
 // New creates a logger writing to w.
 func New(w io.Writer) *Logger {
-	return &Logger{w: w, prevHash: "genesis"}
+	return &Logger{chain: platformaudit.New(w)}
 }
 
 // OpenFile opens (creating) an append-only audit file.
@@ -47,29 +45,15 @@ func OpenFile(path string) (*Logger, *os.File, error) {
 	return New(f), f, nil
 }
 
-// Log serializes the event, chains its hash, and writes one JSON line.
+// Log chains the event's hash and writes one JSON line.
 func (l *Logger) Log(e Event) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
 	if e.Time == "" {
 		e.Time = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	e.PrevHash = l.prevHash
-	e.Hash = hashEvent(e)
-	l.prevHash = e.Hash
-	b, err := json.Marshal(e)
-	if err != nil {
-		return err
-	}
-	_, err = l.w.Write(append(b, '\n'))
-	return err
+	return l.chain.Append(&e)
 }
 
-func hashEvent(e Event) string {
-	// Hash over the canonical content excluding the hash field itself.
-	tmp := e
-	tmp.Hash = ""
-	b, _ := json.Marshal(tmp)
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
+// Verify re-walks the chain and reports whether it is intact.
+func (l *Logger) Verify() bool {
+	return l.chain.Verify()
 }

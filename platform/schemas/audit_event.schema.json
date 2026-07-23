@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Schildkrote/open-security-platform/platform/schemas/audit_event.schema.json",
+  "title": "AuditEvent",
+  "description": "Common envelope for a tamper-evident, hash-chained audit record shared across open-security-platform components. Components add their own domain fields (e.g. api_key/model for the AI gateway, actor/target for PAM); the chaining envelope below is constant. Implemented by platform/audit.Chain.",
+  "type": "object",
+  "required": ["time", "prev_hash", "hash"],
+  "properties": {
+    "time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC RFC3339 timestamp of the event."
+    },
+    "prev_hash": {
+      "type": "string",
+      "description": "Hash of the previous record, or the literal \"genesis\" for the first record."
+    },
+    "hash": {
+      "type": "string",
+      "description": "sha256 (hex) over the record's canonical JSON with this field zeroed."
+    },
+    "actor": { "type": "string", "description": "Who/what caused the event (optional)." },
+    "action": { "type": "string", "description": "What happened, e.g. allow/deny/access_requested (optional)." },
+    "target": { "type": "string", "description": "The resource acted upon (optional)." },
+    "detail": { "type": "string", "description": "Free-form, redaction-safe detail (optional)." }
+  },
+  "additionalProperties": true
+}
