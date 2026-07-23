@@ -6,6 +6,7 @@ import { heuristicTriage } from "./triage.ts";
 import { execute } from "./playbook.ts";
 import { PLAYBOOKS } from "./playbooks.ts";
 import { audit, verifyChain } from "./audit.ts";
+import { ingestAlert } from "./ingest.ts";
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" });
@@ -86,6 +87,9 @@ export function buildHandler(db: DB) {
       }
 
       if (path === "/audit/verify" && method === "GET") return json(res, 200, verifyChain(db));
+
+      // SIEM webhook ingestion (Phase 4): open a case from an inbound alert.
+      if (path === "/ingest" && method === "POST") return json(res, 201, ingestAlert(db, body));
 
       return json(res, 404, { error: "not found" });
     } catch (e) {
