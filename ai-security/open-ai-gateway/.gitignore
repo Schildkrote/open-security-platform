@@ -1,0 +1,10 @@
+# Binaries
+/open-ai-gateway
+*.exe
+
+# Runtime artifacts
+audit.jsonl
+*.log
+
+# OS
+.DS_Store

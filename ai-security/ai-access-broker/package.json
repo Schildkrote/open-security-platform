@@ -1,0 +1,14 @@
+{
+  "name": "ai-access-broker",
+  "version": "0.1.0",
+  "description": "Open AI Access Broker for employees: SSO, app catalog, approvals, DLP/redaction, spend & data-residency controls.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node --experimental-strip-types --no-warnings src/server.ts",
+    "seed": "node --experimental-strip-types --no-warnings src/seed.ts",
+    "test": "node --experimental-strip-types --no-warnings --test test/unit.test.ts test/integration.test.ts"
+  },
+  "engines": { "node": ">=22.6" },
+  "license": "Apache-2.0"
+}

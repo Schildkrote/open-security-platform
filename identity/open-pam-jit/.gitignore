@@ -1,0 +1,5 @@
+/open-pam-jit
+*.exe
+audit.jsonl
+*.log
+.DS_Store

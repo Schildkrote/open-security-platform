@@ -1,0 +1,5 @@
+/attack-path
+*.exe
+*.dot
+*.log
+.DS_Store
