@@ -1,11 +1,18 @@
 # integration
 
-The Phase-2 **integration control plane**: the piece that makes the components
-talk to each other. It is a stdlib-only Python package that drives each
-component's **existing public HTTP API** (no component changes required),
-bridges their data models, brokers a privileged action through `open-pam-jit`,
-executes it inside `agent-sandbox`, and records the whole flow on a common
-hash-chained event schema.
+The Phase-2 **integration layer**: the piece that makes the components talk to
+each other. It provides **two complementary integration paths**, both offline
+and both verified by `make integration`:
+
+1. **Orchestrated flow** (`flow.run_flow`) — a stdlib-only Python control plane
+   drives each component's existing public HTTP API, bridges their data models,
+   brokers a privileged action through `open-pam-jit`, executes it inside
+   `agent-sandbox`, and records the whole flow on a common hash-chained event
+   schema. No component changes required.
+2. **Native webhook spine** (`flow.run_flow_native`) — the components emit and
+   consume integration events **themselves** over HTTP webhooks (shared schema
+   contract + small idiomatic per-component webhook code), cascading directly
+   without an external mapper.
 
 This is the concrete deliverable behind `.context/PLAN.md` Phase 2 ("first
 end-to-end integration flow — the proof") and the "components don't talk to
@@ -35,6 +42,31 @@ Every step appends an `IntegrationEvent`
 to a tamper-evident hash chain; the test verifies that chain plus each
 component's own audit/evidence chain.
 
+## Native webhook spine
+
+The components themselves emit and consume `IntegrationEvent`s (same schema) via
+HTTP webhooks — no external mapper. Wiring is opt-in config (empty by default, so
+offline behaviour is unchanged):
+
+```
+ai-redteam-platform  --campaign.complete-->  pentest-manager  --finding.created-->  ai-compliance-hub
+```
+
+- **`ai-redteam-platform`** (`ai_redteam_platform/webhook.py`): `Platform(...,
+  webhook_urls=[...])` emits `campaign.complete` (with findings) after a campaign.
+- **`pentest-manager`** (`src/webhook.ts`): `POST /webhook` consumes
+  `campaign.complete` → auto-provisions a client + engagement + findings, then
+  emits `finding.created`. Outbound URLs via `OSP_WEBHOOK_URLS` env.
+- **`ai-compliance-hub`** (`compliance_hub/webhook.py`): `POST /webhook` consumes
+  `finding.created` → records tamper-evident evidence (auto-provisions a system +
+  control).
+
+Emission is best-effort and hash-chained; a down subscriber never breaks the
+producer. `tests/test_webhooks.py` triggers one campaign and asserts the cascade
+landed findings + evidence natively (Python → Node → Python). Extending native
+emission to `open-pam-jit` (Go, via a shared `platform/events`) and
+`agent-sandbox` (callback hook) is the immediate follow-up.
+
 ## Modules
 
 - `events.py` — `IntegrationEvent` envelope + `EventChain` (mirrors the
@@ -44,8 +76,15 @@ component's own audit/evidence chain.
   compliance evidence).
 - `servers.py` — start/stop helpers: Python servers in-thread, Node + Go as
   health-checked subprocesses on free localhost ports.
-- `flow.py` — `run_flow(...)`, the orchestrator; returns all ids + verifications.
-- `tests/test_e2e.py` — the offline end-to-end proof.
+- `flow.py` — `run_flow(...)` (orchestrated) and `run_flow_native(...)` (native
+  webhook cascade); both return ids + verifications.
+- `tests/test_e2e.py` — the orchestrated end-to-end proof (five components).
+- `tests/test_webhooks.py` — the native webhook cascade proof.
+
+The per-component webhook code lives in the components themselves:
+`ai-governance/ai-redteam-platform/ai_redteam_platform/webhook.py`,
+`offensive/pentest-manager/src/webhook.ts`,
+`ai-governance/ai-compliance-hub/compliance_hub/webhook.py`.
 
 ## Run
 
@@ -58,10 +97,14 @@ only and uses mock/in-memory backends — no network, no external services.
 
 ## Scope notes
 
-- The control plane records the cross-component event stream. Pushing event
-  emission *into* each component (native outbound webhooks) is a follow-up;
-  today the orchestrator emits on their behalf via their public APIs.
+- Two paths coexist: the **orchestrated** flow (control plane maps + calls) and
+  the **native webhook spine** (components emit/consume directly). Native
+  emission currently covers `ai-redteam-platform → pentest-manager →
+  ai-compliance-hub`; extending it to `open-pam-jit` and `agent-sandbox` is next.
 - `agent-sandbox` is a library (no server), so it is embedded in-process by the
   harness rather than called over HTTP.
+- The shared contract is the event **schema** + chaining algorithm; each
+  component carries a small idiomatic webhook implementation (consistent with the
+  "self-contained component" principle and the per-language audit chains).
 - Real connector backends (Keycloak, Wazuh, DefectDojo, ...) are Phase 3; this
   increment proves the integration spine offline.

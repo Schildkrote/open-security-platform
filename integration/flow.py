@@ -184,3 +184,57 @@ def run_flow(
     }
     result["events"] = chain.events
     return result
+
+
+def run_flow_native(
+    redteam_base: str,
+    pentest_base: str,
+    compliance_base: str,
+) -> dict[str, Any]:
+    """The native webhook spine: components talk to each other directly.
+
+    Unlike ``run_flow`` (an external orchestrator calling each API and mapping
+    data), here the wiring lives in the components: ``ai-redteam-platform`` is
+    configured to emit ``campaign.complete`` to ``pentest-manager``'s webhook,
+    and ``pentest-manager`` emits ``finding.created`` to ``ai-compliance-hub``'s
+    webhook. Triggering a campaign cascades natively:
+
+        redteam --campaign.complete--> pentest --finding.created--> compliance
+
+    The servers must already be started with that webhook wiring (see
+    ``servers.node_server(extra_env=...)`` and ``Platform(webhook_urls=...)``).
+    """
+    rt = RedteamClient(redteam_base)
+    pt = PentestClient(pentest_base)
+    ch = ComplianceClient(compliance_base)
+    result: dict[str, Any] = {}
+
+    # Trigger the campaign; the cascade happens inside the components themselves.
+    target = rt.register_target(name="Range Chatbot", app_type="llm", risk_tier="high")
+    rt.authorize(target["id"], "authorized")
+    campaign = rt.run_campaign(target["id"], guarded=False)
+    result["campaign_id"] = campaign["campaign_id"]
+    result["redteam_findings"] = len(campaign["score"]["findings"])
+    if not campaign["score"]["findings"]:
+        raise FlowError("red-team campaign produced no findings")
+
+    # pentest-manager auto-provisioned a client + engagement + findings via webhook.
+    ai_client = next(
+        (c for c in pt.list_clients() if c["name"] == "AI Red-Team"), None
+    )
+    engagements = pt.list_engagements(ai_client["id"]) if ai_client else []
+    pentest_findings: list[Any] = []
+    for engagement in engagements:
+        pentest_findings.extend(pt.list_findings(engagement["id"]))
+    result["pentest_client"] = ai_client
+    result["pentest_engagements"] = len(engagements)
+    result["pentest_findings"] = pentest_findings
+
+    # ai-compliance-hub collected evidence via its webhook.
+    result["compliance_evidence"] = ch.list_evidence()
+
+    result["verifications"] = {
+        "compliance_evidence": ch.verify_evidence(),
+        "pentest_evidence": pt.verify_evidence(),
+    }
+    return result

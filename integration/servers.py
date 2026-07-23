@@ -112,14 +112,19 @@ class SubprocessServer:
                 self.proc.wait()
 
 
-def node_server(script_dir: str, port: int) -> SubprocessServer:
+def node_server(
+    script_dir: str, port: int, extra_env: Optional[dict[str, str]] = None
+) -> SubprocessServer:
     """pentest-manager: ``node --experimental-strip-types src/server.ts``."""
     node = shutil.which("node") or "node"
+    env = {"PORT": str(port), "DB_PATH": ":memory:"}
+    if extra_env:
+        env.update(extra_env)
     return SubprocessServer(
         [node, "--experimental-strip-types", "--no-warnings", "src/server.ts"],
         port,
         cwd=script_dir,
-        env={"PORT": str(port), "DB_PATH": ":memory:"},
+        env=env,
     )
 
 

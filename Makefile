@@ -42,8 +42,8 @@ fmt: ## Format Go code
 
 verify: lint test ## Lint then test everything
 
-integration: ## Run the end-to-end cross-component flow (needs go + node + python)
-	@python3 -m unittest -v integration.tests.test_e2e
+integration: ## Run the end-to-end cross-component flows (needs go + node + python)
+	@python3 -m unittest discover -v -s integration/tests -t .
 
 docs: ## Serve the docs site with mkdocs (if installed)
 	@command -v mkdocs >/dev/null 2>&1 && mkdocs serve || echo "mkdocs not installed (pip install mkdocs)"
