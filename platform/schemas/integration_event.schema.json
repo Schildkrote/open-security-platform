@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Schildkrote/open-security-platform/platform/schemas/integration_event.schema.json",
+  "title": "IntegrationEvent",
+  "description": "Common envelope for a cross-component integration event recorded by the control plane (integration/flow). Tamper-evident and hash-chained with the same algorithm as platform/audit (sha256 over canonical JSON with the hash field zeroed; prev_hash seeded at \"genesis\"). Each entry records one step of an end-to-end flow (e.g. campaign.complete, finding.created, evidence.collected, access.granted, action.executed).",
+  "type": "object",
+  "required": ["id", "time", "type", "source", "action", "prev_hash", "hash"],
+  "properties": {
+    "id": { "type": "string", "description": "Unique event id (UUID)." },
+    "time": { "type": "string", "format": "date-time", "description": "UTC RFC3339 timestamp." },
+    "type": {
+      "type": "string",
+      "description": "Dotted event type, e.g. campaign.complete, finding.created, evidence.collected, access.granted, action.executed."
+    },
+    "source": {
+      "type": "string",
+      "description": "Component that produced the event (ai-redteam-platform, pentest-manager, ai-compliance-hub, open-pam-jit, agent-sandbox)."
+    },
+    "action": { "type": "string", "description": "The API action invoked, e.g. run_campaign, add_finding, collect_evidence, approve, run." },
+    "subject": { "type": ["string", "null"], "description": "Primary resource id the event is about." },
+    "refs": {
+      "type": "object",
+      "description": "Cross-references to related resources in other components (campaign_id, engagement_id, system_id, request_id, ...).",
+      "additionalProperties": true
+    },
+    "data": { "type": "object", "description": "Event-specific scalar payload.", "additionalProperties": true },
+    "prev_hash": { "type": "string", "description": "Hash of the previous event, or \"genesis\" for the first." },
+    "hash": { "type": "string", "description": "sha256 (hex) over the canonical JSON of this event with this field zeroed." }
+  },
+  "additionalProperties": false
+}
