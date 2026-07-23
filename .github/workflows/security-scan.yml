@@ -23,7 +23,7 @@ jobs:
           - ai-security/open-ai-gateway
           - offensive/attack-path
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
@@ -44,7 +44,7 @@ jobs:
           - offensive/pentest-manager
           - soc/open-soar
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
