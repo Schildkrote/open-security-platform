@@ -1,0 +1,42 @@
+# Aggregate Docker Compose for the containerized components.
+# All services bind to 127.0.0.1 on the host. FOR LOCAL USE ONLY.
+#
+# Note: offensive/agent-redteam-range contains INTENTIONALLY VULNERABLE training
+# targets — never expose them publicly.
+services:
+  oiaf:
+    build:
+      context: ../identity/oiaf
+      dockerfile: deploy/docker/Dockerfile
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  range-chatbot:
+    build:
+      context: ../offensive/agent-redteam-range
+    command: ["python", "server.py", "chatbot", "--port", "8091"]
+    ports: ["127.0.0.1:8091:8091"]
+
+  range-rag:
+    build:
+      context: ../offensive/agent-redteam-range
+    command: ["python", "server.py", "rag", "--port", "8092"]
+    ports: ["127.0.0.1:8092:8092"]
+
+  range-mcp:
+    build:
+      context: ../offensive/agent-redteam-range
+    command: ["python", "server.py", "mcp", "--port", "8093"]
+    ports: ["127.0.0.1:8093:8093"]
+
+  range-agent:
+    build:
+      context: ../offensive/agent-redteam-range
+    command: ["python", "server.py", "agent", "--port", "8094"]
+    ports: ["127.0.0.1:8094:8094"]
+
+  range-codegen:
+    build:
+      context: ../offensive/agent-redteam-range
+    command: ["python", "server.py", "codegen", "--port", "8095"]
+    ports: ["127.0.0.1:8095:8095"]

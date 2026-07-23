@@ -1,0 +1,8 @@
+go 1.26
+
+use (
+	./identity/oiaf
+	./identity/open-pam-jit
+	./ai-security/open-ai-gateway
+	./offensive/attack-path
+)

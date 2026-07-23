@@ -1,0 +1,21 @@
+site_name: open-security-platform
+site_description: An open-source security platform monorepo.
+repo_url: https://github.com/open-security-platform/open-security-platform
+edit_uri: ""
+
+theme:
+  name: mkdocs
+  locale: en
+
+nav:
+  - Home: index.md
+  - Identity: identity.md
+  - AI Security: ai-security.md
+  - AI Governance: ai-governance.md
+  - Offensive: offensive.md
+  - SOC: soc.md
+  - Contributing: contributing.md
+
+markdown_extensions:
+  - tables
+  - fenced_code

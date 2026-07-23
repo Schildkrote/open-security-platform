@@ -1,0 +1,27 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gofmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: gofmt check
+        run: |
+          unformatted=$(gofmt -l identity/oiaf identity/open-pam-jit ai-security/open-ai-gateway offensive/attack-path 2>/dev/null)
+          if [ -n "$unformatted" ]; then
+            echo "Files not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi

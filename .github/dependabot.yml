@@ -1,0 +1,26 @@
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/identity/oiaf"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "gomod"
+    directory: "/identity/open-pam-jit"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "gomod"
+    directory: "/ai-security/open-ai-gateway"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "gomod"
+    directory: "/offensive/attack-path"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
