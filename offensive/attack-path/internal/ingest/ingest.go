@@ -22,20 +22,30 @@ func Load(data []byte) (*graph.Graph, *Descriptor, error) {
 	if err := json.Unmarshal(data, &d); err != nil {
 		return nil, nil, fmt.Errorf("parse scenario: %w", err)
 	}
+	g, err := Build(&d)
+	if err != nil {
+		return nil, nil, err
+	}
+	return g, &d, nil
+}
+
+// Build constructs a Graph from a Descriptor (used by Load and the third-party
+// importers in importers.go).
+func Build(d *Descriptor) (*graph.Graph, error) {
 	g := graph.New()
 	for _, n := range d.Nodes {
 		if n.ID == "" {
-			return nil, nil, fmt.Errorf("node missing id")
+			return nil, fmt.Errorf("node missing id")
 		}
 		g.AddNode(n)
 	}
 	for _, e := range d.Edges {
 		if !g.HasNode(e.From) || !g.HasNode(e.To) {
-			return nil, nil, fmt.Errorf("edge %s->%s references unknown node", e.From, e.To)
+			return nil, fmt.Errorf("edge %s->%s references unknown node", e.From, e.To)
 		}
 		g.AddEdge(e)
 	}
-	return g, &d, nil
+	return g, nil
 }
 
 // LoadFile reads and parses a scenario file.
