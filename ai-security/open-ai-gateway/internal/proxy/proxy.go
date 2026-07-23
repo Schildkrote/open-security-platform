@@ -12,7 +12,7 @@ import (
 	"github.com/Schildkrote/open-ai-gateway/internal/audit"
 	"github.com/Schildkrote/open-ai-gateway/internal/policy"
 	"github.com/Schildkrote/open-ai-gateway/internal/ratelimit"
-	"github.com/Schildkrote/open-ai-gateway/internal/redact"
+	"github.com/Schildkrote/open-ai-gateway/internal/redactor"
 )
 
 type message struct {
@@ -44,6 +44,15 @@ type Gateway struct {
 	RedactResponse bool
 	Client         *http.Client
 	Authorize      func(*http.Request) // optional provider auth (Phase 3 LLM connectors)
+	Redactor       redactor.Redactor   // optional redaction backend (default: regex)
+}
+
+// redactor returns the configured redaction backend, defaulting to regex.
+func (g *Gateway) redactor() redactor.Redactor {
+	if g.Redactor != nil {
+		return g.Redactor
+	}
+	return redactor.Regex{}
 }
 
 func (g *Gateway) client() *http.Client {
@@ -90,13 +99,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Request redaction.
 	if g.RedactRequest || dec.Action == policy.Redact {
-		redacted, findings := redact.Redact(content)
-		if len(findings) > 0 {
+		redacted, kinds := g.redactor().Redact(content)
+		if len(kinds) > 0 {
 			applyRedaction(&req, redacted)
 			body, _ = json.Marshal(req)
-			for _, f := range findings {
-				ev.Redactions = append(ev.Redactions, f.Kind)
-			}
+			ev.Redactions = append(ev.Redactions, kinds...)
 		}
 	}
 
@@ -123,10 +130,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if json.Unmarshal(respBody, &cr) == nil {
 		if g.RedactResponse {
 			for i := range cr.Choices {
-				cleaned, findings := redact.Redact(cr.Choices[i].Message.Content)
+				cleaned, kinds := g.redactor().Redact(cr.Choices[i].Message.Content)
 				cr.Choices[i].Message.Content = cleaned
-				for _, f := range findings {
-					ev.Redactions = append(ev.Redactions, "resp:"+f.Kind)
+				for _, k := range kinds {
+					ev.Redactions = append(ev.Redactions, "resp:"+k)
 				}
 			}
 			respBody, _ = json.Marshal(cr)
