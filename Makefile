@@ -1,7 +1,7 @@
 # open-security-platform — polyglot monorepo orchestration.
 # Fans out build/test/lint across Go, Node/TS and Python components.
 
-GO_DIRS   := identity/oiaf identity/open-pam-jit ai-security/open-ai-gateway offensive/attack-path
+GO_DIRS   := platform identity/oiaf identity/open-pam-jit ai-security/open-ai-gateway offensive/attack-path
 NODE_DIRS := identity/agent-identity ai-security/ai-access-broker ai-security/mcp-security-gateway offensive/pentest-manager soc/open-soar
 PY_DIRS   := ai-security/rag-authorization ai-security/agent-sandbox ai-governance/ai-compliance-hub ai-governance/ai-redteam-evals ai-governance/ai-redteam-platform offensive/purple-team offensive/agent-redteam-range
 

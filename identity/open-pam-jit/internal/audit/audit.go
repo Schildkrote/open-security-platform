@@ -1,15 +1,18 @@
-// Package audit writes a tamper-evident, hash-chained audit trail.
+// Package audit writes a tamper-evident, hash-chained audit trail for
+// open-pam-jit. The chaining/hashing/serialization engine is shared via
+// platform/audit; this package supplies the PAM-specific record type and an
+// ergonomic Log(actor, action, target, detail) API on top of it.
 package audit
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"io"
 	"sync"
 	"time"
+
+	platformaudit "github.com/Schildkrote/platform/audit"
 )
 
+// Event is a single PAM/JIT audit record.
 type Event struct {
 	Time     string `json:"time"`
 	Actor    string `json:"actor,omitempty"`
@@ -20,62 +23,44 @@ type Event struct {
 	Hash     string `json:"hash"`
 }
 
+// Logger appends hash-chained Events using the shared chain engine.
 type Logger struct {
-	mu       sync.Mutex
-	w        io.Writer
-	prevHash string
-	history  []Event
+	mu      sync.Mutex
+	chain   *platformaudit.Chain
+	history []Event
 }
 
+// New returns a Logger writing JSONL to w (nil discards output).
 func New(w io.Writer) *Logger {
-	return &Logger{w: w, prevHash: "genesis"}
+	return &Logger{chain: platformaudit.New(w)}
 }
 
+// Log records an access event and returns the chained Event.
 func (l *Logger) Log(actor, action, target, detail string) Event {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e := Event{
-		Time:     time.Now().UTC().Format(time.RFC3339Nano),
-		Actor:    actor,
-		Action:   action,
-		Target:   target,
-		Detail:   detail,
-		PrevHash: l.prevHash,
+		Time:   time.Now().UTC().Format(time.RFC3339Nano),
+		Actor:  actor,
+		Action: action,
+		Target: target,
+		Detail: detail,
 	}
-	e.Hash = hash(e)
-	l.prevHash = e.Hash
+	_ = l.chain.Append(&e) // populates e.PrevHash and e.Hash
 	l.history = append(l.history, e)
-	if l.w != nil {
-		b, _ := json.Marshal(e)
-		_, _ = l.w.Write(append(b, '\n'))
-	}
 	return e
 }
 
-// Verify re-walks the in-memory chain.
+// Verify re-walks the chain and reports whether it is intact.
 func (l *Logger) Verify() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	prev := "genesis"
-	for _, e := range l.history {
-		if e.PrevHash != prev || e.Hash != hash(e) {
-			return false
-		}
-		prev = e.Hash
-	}
-	return true
+	return l.chain.Verify()
 }
 
+// History returns a copy of all recorded events in chain order.
 func (l *Logger) History() []Event {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return append([]Event(nil), l.history...)
-}
-
-func hash(e Event) string {
-	tmp := e
-	tmp.Hash = ""
-	b, _ := json.Marshal(tmp)
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
 }

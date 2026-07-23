@@ -1,6 +1,7 @@
 go 1.26
 
 use (
+	./platform
 	./identity/oiaf
 	./identity/open-pam-jit
 	./ai-security/open-ai-gateway
