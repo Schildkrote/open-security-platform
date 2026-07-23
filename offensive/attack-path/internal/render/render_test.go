@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/example/attack-path/internal/analysis"
-	"github.com/example/attack-path/internal/graph"
-	"github.com/example/attack-path/internal/path"
+	"github.com/Schildkrote/attack-path/internal/analysis"
+	"github.com/Schildkrote/attack-path/internal/graph"
+	"github.com/Schildkrote/attack-path/internal/path"
 )
 
 func build() *graph.Graph {

@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/example/open-pam-jit/internal/access"
-	"github.com/example/open-pam-jit/internal/api"
-	"github.com/example/open-pam-jit/internal/audit"
-	"github.com/example/open-pam-jit/internal/vault"
+	"github.com/Schildkrote/open-pam-jit/internal/access"
+	"github.com/Schildkrote/open-pam-jit/internal/api"
+	"github.com/Schildkrote/open-pam-jit/internal/audit"
+	"github.com/Schildkrote/open-pam-jit/internal/vault"
 )
 
 func main() {

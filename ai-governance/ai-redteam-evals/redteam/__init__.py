@@ -1,10 +1,10 @@
 """ai-redteam-evals: offline AI red-team & eval harness."""
-from .targets import Target, MockTarget, AdapterTarget
 from .attacks import ATTACK_LIBRARY, AttackCase, cases_for, categories
 from .detectors import REGISTRY, Judgment
-from .harness import EvalHarness, EvalReport, CaseResult
+from .harness import CaseResult, EvalHarness, EvalReport
+from .regression import compare, load_baseline, save_baseline
 from .report import to_json, to_markdown
-from .regression import save_baseline, load_baseline, compare
+from .targets import AdapterTarget, MockTarget, Target
 
 __all__ = [
     "Target", "MockTarget", "AdapterTarget",

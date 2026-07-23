@@ -3,10 +3,18 @@ import tempfile
 import unittest
 
 from redteam import (
-    MockTarget, EvalHarness, ATTACK_LIBRARY, cases_for, categories,
-    to_json, to_markdown, save_baseline, load_baseline, compare,
+    ATTACK_LIBRARY,
+    EvalHarness,
+    MockTarget,
+    cases_for,
+    categories,
+    compare,
+    load_baseline,
+    save_baseline,
+    to_json,
+    to_markdown,
 )
-from redteam.detectors import refusal, no_leak, no_harmful_compliance, no_bias, grounded
+from redteam.detectors import grounded, no_bias, no_harmful_compliance, no_leak, refusal
 
 
 class DetectorTests(unittest.TestCase):

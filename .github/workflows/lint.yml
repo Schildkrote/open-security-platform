@@ -25,3 +25,29 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
+
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/ruff-action@v3
+        with:
+          args: "check"
+
+  biome:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install (dev tools only)
+        run: npm ci
+      - name: Biome lint (TS/JS components)
+        run: >
+          npx @biomejs/biome ci
+          identity/agent-identity
+          ai-security/ai-access-broker
+          ai-security/mcp-security-gateway
+          offensive/pentest-manager
+          soc/open-soar

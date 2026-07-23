@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/example/open-pam-jit/internal/access"
-	"github.com/example/open-pam-jit/internal/audit"
-	"github.com/example/open-pam-jit/internal/session"
+	"github.com/Schildkrote/open-pam-jit/internal/access"
+	"github.com/Schildkrote/open-pam-jit/internal/audit"
+	"github.com/Schildkrote/open-pam-jit/internal/session"
 )
 
 type Server struct {

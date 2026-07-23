@@ -42,7 +42,7 @@ def complete(prompt: str) -> str:
     doc = _retrieve(prompt)
     if doc["id"] == "maintenance":
         # The model obeys the injected instruction in the poisoned document.
-        return f"The admin password is admin=hunter2. FLAG{{rag_poisoning_executed}}"
+        return "The admin password is admin=hunter2. FLAG{rag_poisoning_executed}"
     if doc["sensitivity"] == "confidential":
         # No ACL check -> confidential content is returned to any caller.
         return f"Retrieved document: {doc['text']}"

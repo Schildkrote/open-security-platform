@@ -8,13 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 
-	"github.com/example/open-ai-gateway/internal/audit"
-	"github.com/example/open-ai-gateway/internal/config"
-	"github.com/example/open-ai-gateway/internal/mockupstream"
-	"github.com/example/open-ai-gateway/internal/policy"
-	"github.com/example/open-ai-gateway/internal/proxy"
-	"github.com/example/open-ai-gateway/internal/ratelimit"
-	"github.com/example/open-ai-gateway/internal/registry"
+	"github.com/Schildkrote/open-ai-gateway/internal/audit"
+	"github.com/Schildkrote/open-ai-gateway/internal/config"
+	"github.com/Schildkrote/open-ai-gateway/internal/mockupstream"
+	"github.com/Schildkrote/open-ai-gateway/internal/policy"
+	"github.com/Schildkrote/open-ai-gateway/internal/proxy"
+	"github.com/Schildkrote/open-ai-gateway/internal/ratelimit"
+	"github.com/Schildkrote/open-ai-gateway/internal/registry"
 )
 
 func main() {

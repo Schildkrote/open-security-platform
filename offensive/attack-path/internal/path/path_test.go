@@ -3,7 +3,7 @@ package path
 import (
 	"testing"
 
-	"github.com/example/attack-path/internal/graph"
+	"github.com/Schildkrote/attack-path/internal/graph"
 )
 
 func buildLinear() *graph.Graph {

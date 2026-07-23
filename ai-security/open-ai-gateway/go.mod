@@ -1,3 +1,3 @@
-module github.com/example/open-ai-gateway
+module github.com/Schildkrote/open-ai-gateway
 
 go 1.26

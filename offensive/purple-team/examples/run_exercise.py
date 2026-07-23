@@ -1,5 +1,5 @@
 """Demo: run a purple-team exercise and print the coverage report."""
-from purple_team import run_exercise, coverage_report, coverage_percent, gaps
+from purple_team import coverage_percent, coverage_report, gaps, run_exercise
 
 result = run_exercise()
 print(f"Detection coverage: {coverage_percent():.1%}  |  "
