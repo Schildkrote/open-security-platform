@@ -1,0 +1,13 @@
+{
+  "name": "open-soar",
+  "version": "0.1.0",
+  "description": "Open SOAR / IR Automation: playbook DAG engine, case management, enrichment, response actions, AI-assisted triage, and audit.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node --experimental-strip-types --no-warnings src/server.ts",
+    "test": "node --experimental-strip-types --no-warnings --test test/unit.test.ts test/integration.test.ts"
+  },
+  "engines": { "node": ">=22.6" },
+  "license": "Apache-2.0"
+}

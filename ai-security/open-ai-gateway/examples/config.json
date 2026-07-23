@@ -1,0 +1,23 @@
+{
+  "listen": ":8080",
+  "use_mock_upstream": true,
+  "redact_request": true,
+  "redact_response": true,
+  "audit_file": "audit.jsonl",
+  "default_action": "allow",
+  "limits": {
+    "RequestsPerMinute": 60,
+    "BudgetTokens": 1000000,
+    "BudgetDollars": 10,
+    "PricePer1KTokens": 0.01
+  },
+  "rules": [
+    { "name": "block-legacy-models", "model_pattern": "^gpt-3", "action": "deny", "reason": "deprecated model" },
+    { "name": "redact-ssn", "content_re": "\\d{3}-\\d{2}-\\d{4}", "action": "redact" },
+    { "name": "block-secret-exfil", "content_re": "-----BEGIN [A-Z ]*PRIVATE KEY-----", "action": "deny", "reason": "private key in prompt" }
+  ],
+  "tools": [
+    { "name": "web-search", "kind": "mcp", "risk": "low", "allowed": true, "description": "Search the web" },
+    { "name": "shell-exec", "kind": "function", "risk": "critical", "allowed": false, "description": "Execute shell commands" }
+  ]
+}

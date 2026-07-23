@@ -1,0 +1,29 @@
+{
+  "name": "Cloud IAM privilege-escalation scenario",
+  "nodes": [
+    { "id": "internet", "type": "exposure", "name": "Internet", "exposure": true, "props": { "exploitability": "1.0" } },
+    { "id": "web-app", "type": "asset", "name": "Public Web App", "props": { "exploitability": "0.9" } },
+    { "id": "vuln-rce", "type": "vuln", "name": "RCE in Web App (CVE)", "props": { "exploitability": "0.8" } },
+    { "id": "svc-account", "type": "identity", "name": "App Service Account", "props": { "exploitability": "0.7" } },
+    { "id": "perm-read-secrets", "type": "permission", "name": "SecretsManager:Read", "props": { "exploitability": "0.9" } },
+    { "id": "secrets-store", "type": "data", "name": "Secrets Store", "props": { "exploitability": "0.9" } },
+    { "id": "iam-misconfig", "type": "vuln", "name": "Overly-permissive IAM role trust", "props": { "exploitability": "0.6" } },
+    { "id": "iam-admin-role", "type": "identity", "name": "IAM Admin Role", "props": { "exploitability": "0.7" } },
+    { "id": "cloud-admin", "type": "identity", "name": "Cloud Account Admin", "props": { "exploitability": "0.8" } },
+    { "id": "prod-db", "type": "critical", "name": "Production Database", "critical": true },
+    { "id": "domain-admin", "type": "critical", "name": "Domain Admin", "critical": true }
+  ],
+  "edges": [
+    { "from": "internet", "to": "web-app", "type": "reach", "weight": 1.0 },
+    { "from": "web-app", "to": "vuln-rce", "type": "exploit", "weight": 0.8 },
+    { "from": "vuln-rce", "to": "svc-account", "type": "compromise", "weight": 0.7 },
+    { "from": "svc-account", "to": "perm-read-secrets", "type": "has_permission", "weight": 0.9 },
+    { "from": "perm-read-secrets", "to": "secrets-store", "type": "read", "weight": 0.9 },
+    { "from": "secrets-store", "to": "cloud-admin", "type": "credential_reuse", "weight": 0.6 },
+    { "from": "svc-account", "to": "iam-misconfig", "type": "assume_role", "weight": 0.6 },
+    { "from": "iam-misconfig", "to": "iam-admin-role", "type": "privilege_escalation", "weight": 0.6 },
+    { "from": "iam-admin-role", "to": "cloud-admin", "type": "grant_admin", "weight": 0.8 },
+    { "from": "cloud-admin", "to": "prod-db", "type": "admin_access", "weight": 0.9 },
+    { "from": "cloud-admin", "to": "domain-admin", "type": "admin_access", "weight": 0.7 }
+  ]
+}
