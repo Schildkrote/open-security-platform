@@ -7,6 +7,7 @@ down on exit. Everything binds 127.0.0.1 only (offline safety model).
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import socket
@@ -14,6 +15,7 @@ import subprocess
 import threading
 import time
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional, Sequence
 
 
@@ -128,12 +130,77 @@ def node_server(
     )
 
 
-def go_server(binary: str, port: int, audit_file: str) -> SubprocessServer:
+def go_server(
+    binary: str, port: int, audit_file: str, extra_args: Optional[Sequence[str]] = None
+) -> SubprocessServer:
     """open-pam-jit: a prebuilt binary listening on ``port``."""
-    return SubprocessServer(
-        [binary, "-listen", f":{port}", "-audit", audit_file],
-        port,
-    )
+    cmd = [binary, "-listen", f":{port}", "-audit", audit_file]
+    if extra_args:
+        cmd.extend(extra_args)
+    return SubprocessServer(cmd, port)
+
+
+class CollectorServer:
+    """A tiny webhook collector that stores received integration events.
+
+    ``POST /webhook`` records the event; ``GET /events`` returns them. Used by
+    the native-spine test to observe events emitted by components (e.g.
+    open-pam-jit ``access.granted``, agent-sandbox ``action.executed``).
+    """
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+        self.port: Optional[int] = None
+        self._server: Optional[ThreadingHTTPServer] = None
+        self._thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+
+    @property
+    def base(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        """Return a copy of the collected events (thread-safe)."""
+        with self._lock:
+            return list(self.events)
+
+    def __enter__(self) -> "CollectorServer":
+        collector = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args: Any) -> None:  # silence default logging
+                pass
+
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                with collector._lock:
+                    collector.events.append(body)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok":true}')
+
+            def do_GET(self) -> None:  # noqa: N802
+                with collector._lock:
+                    snapshot = list(collector.events)
+                data = json.dumps(snapshot).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self._server.server_address[1]
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
 
 
 def build_go(repo_root: str, out_path: str, package: str = "./identity/open-pam-jit") -> str:

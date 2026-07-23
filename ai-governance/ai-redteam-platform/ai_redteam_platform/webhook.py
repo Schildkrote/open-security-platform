@@ -23,9 +23,12 @@ def _now() -> str:
 
 
 def _digest(event: dict[str, Any]) -> str:
+    # Canonical form: compact, sorted-key, raw-UTF-8 JSON (matches the Go and
+    # Node emitters so chains verify across languages).
     tmp = dict(event)
     tmp["hash"] = ""
-    return hashlib.sha256(json.dumps(tmp, sort_keys=True).encode()).hexdigest()
+    canonical = json.dumps(tmp, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 class Emitter:
