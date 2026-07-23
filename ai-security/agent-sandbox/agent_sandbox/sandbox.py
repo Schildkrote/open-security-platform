@@ -37,6 +37,10 @@ class Sandbox:
         self.jail: Optional[str] = None
         self._snap: Optional[str] = None
         self._tools: dict[str, Callable[[list[str]], str]] = {}
+        # Optional hook invoked with the SessionRecord after every execution
+        # attempt (allowed or denied). Wire it to an integration-event emitter
+        # to publish "action.executed" natively. Best-effort: errors are ignored.
+        self.on_execute: Optional[Callable[[SessionRecord], None]] = None
 
     # -- lifecycle -------------------------------------------------------
     def __enter__(self) -> "Sandbox":
@@ -70,10 +74,12 @@ class Sandbox:
         ok, reason = self.command_policy.validate(command)
         if not ok:
             rec.allowed, rec.reason = False, reason
+            self._notify(rec)
             return rec
         ok, reason = self.egress_policy.validate_command(command)
         if not ok:
             rec.allowed, rec.reason = False, reason
+            self._notify(rec)
             return rec
 
         self._snap = fs.snapshot(self.jail)
@@ -108,7 +114,16 @@ class Sandbox:
 
         after = fs.list_files(fs.workspace(self.jail))
         rec.files_changed = fs.diff_files(before, after)
+        self._notify(rec)
         return rec
+
+    def _notify(self, rec: SessionRecord) -> None:
+        """Invoke the on_execute hook (if any); a failing hook never breaks execution."""
+        if self.on_execute is not None:
+            try:
+                self.on_execute(rec)
+            except Exception:  # noqa: BLE001 - best-effort notification
+                pass
 
     def rollback(self) -> None:
         if self.jail and self._snap:

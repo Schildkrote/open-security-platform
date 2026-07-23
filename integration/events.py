@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -50,9 +52,13 @@ def new_event(
 
 
 def _digest(record: dict[str, Any]) -> str:
+    # Canonical form: compact, sorted-key, raw-UTF-8 JSON — identical to the Go
+    # (platform/events) and Node (stableStringify) emitters, so chains verify
+    # across languages.
     tmp = dict(record)
     tmp["hash"] = ""
-    return hashlib.sha256(json.dumps(tmp, sort_keys=True).encode()).hexdigest()
+    canonical = json.dumps(tmp, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 class EventChain:
@@ -79,3 +85,47 @@ class EventChain:
 
     def __len__(self) -> int:
         return len(self.events)
+
+
+class HttpEmitter:
+    """Hash-chained integration-event emitter that POSTs to subscriber URLs.
+
+    A generic, reusable counterpart to the per-component emitters; handy for
+    wiring library components (e.g. ``agent-sandbox``) into the native webhook
+    spine. Opt-in (no URLs => no-op) and best-effort (a down subscriber never
+    raises).
+    """
+
+    def __init__(self, source: str, urls: Optional[list[str]] = None) -> None:
+        self.source = source
+        self.urls = list(urls or [])
+        self._prev = GENESIS
+        self._lock = threading.Lock()
+
+    def emit(
+        self,
+        type: str,
+        action: str,
+        subject: Optional[str] = None,
+        refs: Optional[dict[str, Any]] = None,
+        **data: Any,
+    ) -> Optional[dict[str, Any]]:
+        if not self.urls:
+            return None
+        with self._lock:
+            event = new_event(type, self.source, action, subject, refs, **data)
+            event["prev_hash"] = self._prev
+            event["hash"] = _digest(event)
+            self._prev = event["hash"]
+        payload = json.dumps(event).encode()
+        for url in self.urls:
+            try:
+                req = urllib.request.Request(
+                    url, data=payload, method="POST",
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    resp.read()
+            except Exception:  # noqa: BLE001 - a down subscriber must not break the producer
+                pass
+        return event

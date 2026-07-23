@@ -8,11 +8,13 @@ import (
 	"github.com/Schildkrote/open-pam-jit/internal/access"
 	"github.com/Schildkrote/open-pam-jit/internal/audit"
 	"github.com/Schildkrote/open-pam-jit/internal/session"
+	"github.com/Schildkrote/platform/events"
 )
 
 type Server struct {
-	Mgr   *access.Manager
-	Audit *audit.Logger
+	Mgr    *access.Manager
+	Audit  *audit.Logger
+	Events *events.Emitter
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -76,6 +78,7 @@ func (s *Server) Routes() http.Handler {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
+		s.emitAccess(cred, body.Approver, r.PathValue("id"))
 		writeJSON(w, http.StatusOK, cred)
 	})
 
@@ -106,6 +109,7 @@ func (s *Server) Routes() http.Handler {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
+		s.emitAccess(cred, body.Requester, "")
 		writeJSON(w, http.StatusCreated, cred)
 	})
 
@@ -168,6 +172,21 @@ func (s *Server) Routes() http.Handler {
 	})
 
 	return mux
+}
+
+// emitAccess publishes an access.granted integration event (opt-in, best-effort).
+func (s *Server) emitAccess(cred *access.Credential, actor, requestID string) {
+	if s.Events == nil {
+		return
+	}
+	refs := map[string]any{"target_id": cred.TargetID}
+	if requestID != "" {
+		refs["request_id"] = requestID
+	}
+	_, _ = s.Events.Emit("access.granted", "approve", cred.ID, refs, map[string]any{
+		"actor":       actor,
+		"break_glass": cred.BreakGlass,
+	})
 }
 
 func itoa(n int) string {

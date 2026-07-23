@@ -50,6 +50,8 @@ offline behaviour is unchanged):
 
 ```
 ai-redteam-platform  --campaign.complete-->  pentest-manager  --finding.created-->  ai-compliance-hub
+open-pam-jit         --access.granted----->  (subscribers)        [Go, platform/events]
+agent-sandbox        --action.executed---->  (subscribers)        [on_execute hook]
 ```
 
 - **`ai-redteam-platform`** (`ai_redteam_platform/webhook.py`): `Platform(...,
@@ -60,12 +62,23 @@ ai-redteam-platform  --campaign.complete-->  pentest-manager  --finding.created-
 - **`ai-compliance-hub`** (`compliance_hub/webhook.py`): `POST /webhook` consumes
   `finding.created` → records tamper-evident evidence (auto-provisions a system +
   control).
+- **`open-pam-jit`** (Go, shared `platform/events` emitter): emits
+  `access.granted` on approve / break-glass. Outbound URLs via `-webhooks` flag.
+- **`agent-sandbox`**: `Sandbox.on_execute` hook fires with the `SessionRecord`
+  after every execution; wire it to an emitter (e.g. `integration.events.HttpEmitter`)
+  to publish `action.executed`.
+
+**Canonical hash form (cross-language):** every emitter hashes over **compact,
+sorted-key, raw-UTF-8 JSON** with the `hash` field zeroed — Python
+(`json.dumps(sort_keys=True, separators=(",",":"))`), Go (`platform/events`
+`marshalCanonical`), and Node (`stableStringify`) all produce identical bytes for
+the same event, so a chain emitted in one language verifies in another.
 
 Emission is best-effort and hash-chained; a down subscriber never breaks the
-producer. `tests/test_webhooks.py` triggers one campaign and asserts the cascade
-landed findings + evidence natively (Python → Node → Python). Extending native
-emission to `open-pam-jit` (Go, via a shared `platform/events`) and
-`agent-sandbox` (callback hook) is the immediate follow-up.
+producer. `tests/test_webhooks.py` proves both: the campaign cascade
+(Python → Node → Python) and the privileged-action emission (Go `access.granted`
++ Python `action.executed`), verifying each per-source chain **and recomputing
+the hashes cross-language**.
 
 ## Modules
 
@@ -84,7 +97,9 @@ emission to `open-pam-jit` (Go, via a shared `platform/events`) and
 The per-component webhook code lives in the components themselves:
 `ai-governance/ai-redteam-platform/ai_redteam_platform/webhook.py`,
 `offensive/pentest-manager/src/webhook.ts`,
-`ai-governance/ai-compliance-hub/compliance_hub/webhook.py`.
+`ai-governance/ai-compliance-hub/compliance_hub/webhook.py`,
+`identity/open-pam-jit/internal/api/api.go` (uses the shared Go emitter
+`platform/events`), and the `ai-security/agent-sandbox` `on_execute` hook.
 
 ## Run
 
@@ -99,8 +114,11 @@ only and uses mock/in-memory backends — no network, no external services.
 
 - Two paths coexist: the **orchestrated** flow (control plane maps + calls) and
   the **native webhook spine** (components emit/consume directly). Native
-  emission currently covers `ai-redteam-platform → pentest-manager →
-  ai-compliance-hub`; extending it to `open-pam-jit` and `agent-sandbox` is next.
+  emission covers the campaign cascade (`ai-redteam-platform → pentest-manager →
+  ai-compliance-hub`) plus privileged-action emission (`open-pam-jit`
+  `access.granted`, `agent-sandbox` `action.executed`). Next: a shared
+  subscription/registry so components discover subscribers, and Phase-3 real
+  connectors.
 - `agent-sandbox` is a library (no server), so it is embedded in-process by the
   harness rather than called over HTTP.
 - The shared contract is the event **schema** + chaining algorithm; each
