@@ -25,6 +25,8 @@ type Claims struct {
 	Issuer   string   `json:"iss,omitempty"`
 	Audience string   `json:"aud,omitempty"`
 	Scopes   []string `json:"scopes,omitempty"`
+	Roles    []string `json:"roles,omitempty"` // RBAC roles (see platform/rbac)
+	Tenant   string   `json:"tenant,omitempty"`
 	IssuedAt int64    `json:"iat,omitempty"`
 	Expires  int64    `json:"exp,omitempty"`
 }
