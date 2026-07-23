@@ -60,6 +60,15 @@ class PentestClient:
     def create_engagement(self, client_id: str, name: str) -> Any:
         return _request("POST", f"{self.base}/engagements", {"client_id": client_id, "name": name})
 
+    def list_clients(self) -> Any:
+        return _request("GET", f"{self.base}/clients")
+
+    def list_engagements(self, client_id: Optional[str] = None) -> Any:
+        url = f"{self.base}/engagements"
+        if client_id:
+            url += f"?client_id={client_id}"
+        return _request("GET", url)
+
     def add_finding(self, engagement_id: str, finding_input: dict[str, Any]) -> Any:
         return _request("POST", f"{self.base}/engagements/{engagement_id}/findings", finding_input)
 

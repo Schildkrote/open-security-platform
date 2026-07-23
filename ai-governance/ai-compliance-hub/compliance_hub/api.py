@@ -7,7 +7,7 @@ import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from . import cards, controls, evidence, models
+from . import cards, controls, evidence, models, webhook
 
 
 def make_handler(conn: sqlite3.Connection) -> type[BaseHTTPRequestHandler]:
@@ -73,6 +73,10 @@ def make_handler(conn: sqlite3.Connection) -> type[BaseHTTPRequestHandler]:
                     return self._send(201, evidence.collect_evidence(conn, **body))
                 if path == "/cards/model":
                     return self._send(200, {"card": cards.model_card(body)})
+                if path == "/webhook":
+                    created = webhook.consume_event(conn, body)
+                    return self._send(200, {"consumed": len(created),
+                                            "evidence": [e["id"] for e in created]})
             except (TypeError, ValueError) as e:
                 return self._send(400, {"error": str(e)})
             return self._send(404, {"error": "not found"})

@@ -12,16 +12,23 @@ from . import registry, reports
 from .audit import AuditLog
 from .engine import HttpTarget, MockTarget
 from .runner import CampaignResult, SafeRunner
+from .webhook import Emitter
 
 
 class Platform:
     """Wires the registry, safe runner, evidence and reporting together."""
 
-    def __init__(self, conn: sqlite3.Connection, audit: AuditLog | None = None) -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        audit: AuditLog | None = None,
+        webhook_urls: list[str] | None = None,
+    ) -> None:
         self.conn = conn
         self.audit = audit or AuditLog()
         self.runner = SafeRunner(conn, self.audit)
         self.results: dict[str, CampaignResult] = {}
+        self.emitter = Emitter("ai-redteam-platform", webhook_urls)
 
     def run(self, target_id: str, guarded: bool = True) -> CampaignResult:
         target = registry.get_target(self.conn, target_id)
@@ -31,7 +38,26 @@ class Platform:
             engine_target = MockTarget(guarded=guarded, name=(target or {}).get("name", "mock"))
         result = self.runner.run_campaign(target_id, engine_target)
         self.results[result.campaign_id] = result
+        self._emit_campaign(target, result)
         return result
+
+    def _emit_campaign(self, target: dict | None, result: CampaignResult) -> None:
+        """Publish a campaign.complete integration event to subscribers (opt-in)."""
+        if not self.emitter.urls:
+            return
+        score = result.score.to_dict()
+        self.emitter.emit(
+            "campaign.complete",
+            "run_campaign",
+            subject=result.target_id,
+            refs={
+                "campaign_id": result.campaign_id,
+                "target_name": (target or {}).get("name"),
+            },
+            score=score["score"],
+            risk_score=score["risk_score"],
+            findings=score["findings"],
+        )
 
 
 def make_handler(platform: Platform) -> type[BaseHTTPRequestHandler]:
