@@ -11,9 +11,9 @@ import (
 
 // Descriptor is the JSON schema for a scenario.
 type Descriptor struct {
-	Name  string        `json:"name"`
-	Nodes []graph.Node  `json:"nodes"`
-	Edges []graph.Edge  `json:"edges"`
+	Name  string       `json:"name"`
+	Nodes []graph.Node `json:"nodes"`
+	Edges []graph.Edge `json:"edges"`
 }
 
 // Load parses a scenario from JSON bytes into a Graph.
