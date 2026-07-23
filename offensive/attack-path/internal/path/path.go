@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/example/attack-path/internal/graph"
+	"github.com/Schildkrote/attack-path/internal/graph"
 )
 
 // Path is a single attack path through the graph.

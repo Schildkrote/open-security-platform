@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/example/attack-path/internal/graph"
+	"github.com/Schildkrote/attack-path/internal/graph"
 )
 
 // Descriptor is the JSON schema for a scenario.

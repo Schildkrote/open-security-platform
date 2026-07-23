@@ -3,8 +3,7 @@ import threading
 import unittest
 import urllib.request
 
-from range_apps import APPS, complete, info, make_server, names
-from range_apps import agent, chatbot, codegen, mcp, rag
+from range_apps import agent, chatbot, codegen, complete, info, make_server, mcp, names, rag
 
 
 class VulnerableBehaviorTests(unittest.TestCase):

@@ -5,7 +5,7 @@ import json
 import re
 import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable
+from typing import Any
 
 from . import cards, controls, evidence, models
 

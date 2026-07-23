@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/open-pam-jit/internal/audit"
-	"github.com/example/open-pam-jit/internal/vault"
+	"github.com/Schildkrote/open-pam-jit/internal/audit"
+	"github.com/Schildkrote/open-pam-jit/internal/vault"
 )
 
 type Target struct {

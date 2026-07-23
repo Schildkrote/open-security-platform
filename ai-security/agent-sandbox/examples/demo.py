@@ -1,5 +1,5 @@
 """Demo: run a few commands in the sandbox and print session records."""
-from agent_sandbox import Sandbox, EgressPolicy, Limits
+from agent_sandbox import EgressPolicy, Limits, Sandbox
 
 with Sandbox(
     egress_policy=EgressPolicy(allowed_domains={"pypi.org"}),

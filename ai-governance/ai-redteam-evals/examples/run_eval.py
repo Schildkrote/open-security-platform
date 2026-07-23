@@ -1,5 +1,5 @@
 """Run the eval suite against guarded and unguarded mock targets."""
-from redteam import MockTarget, EvalHarness, to_markdown, save_baseline, compare
+from redteam import EvalHarness, MockTarget, compare, save_baseline, to_markdown
 
 guarded = EvalHarness(MockTarget(guarded=True, name="guarded-model")).run()
 unguarded = EvalHarness(MockTarget(guarded=False, name="unguarded-model")).run()

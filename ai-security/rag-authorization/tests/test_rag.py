@@ -1,8 +1,15 @@
 import unittest
 
 from rag_authz import (
-    Sensitivity, User, Document, DocumentStore, can_access,
-    classify, VectorStore, AuthorizedRetriever, detect_overexposure, AuditLog,
+    AuthorizedRetriever,
+    Document,
+    DocumentStore,
+    Sensitivity,
+    User,
+    VectorStore,
+    can_access,
+    classify,
+    detect_overexposure,
 )
 
 

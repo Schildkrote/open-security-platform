@@ -1,3 +1,3 @@
-module github.com/example/attack-path
+module github.com/Schildkrote/attack-path
 
 go 1.26

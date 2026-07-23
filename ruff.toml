@@ -1,0 +1,25 @@
+# Ruff configuration for the Python components (stdlib-only).
+# Run from the repo root: `ruff check <component-dirs>` (see Makefile / CI).
+target-version = "py311"
+line-length = 100
+
+extend-exclude = [
+  "node_modules",
+  "site",
+  ".git",
+  "__pycache__",
+]
+
+[lint]
+select = [
+  "E",   # pycodestyle errors
+  "W",   # pycodestyle warnings
+  "F",   # pyflakes
+  "I",   # isort
+]
+ignore = [
+  "E501",  # line-too-long: not enforced (kept readable per-component)
+]
+
+[lint.isort]
+known-first-party = []

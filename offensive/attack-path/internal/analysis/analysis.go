@@ -4,7 +4,7 @@ package analysis
 import (
 	"sort"
 
-	"github.com/example/attack-path/internal/path"
+	"github.com/Schildkrote/attack-path/internal/path"
 )
 
 // ChokePoint is a node or edge that lies on multiple attack paths.

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/example/open-ai-gateway/internal/audit"
-	"github.com/example/open-ai-gateway/internal/mockupstream"
-	"github.com/example/open-ai-gateway/internal/policy"
-	"github.com/example/open-ai-gateway/internal/ratelimit"
+	"github.com/Schildkrote/open-ai-gateway/internal/audit"
+	"github.com/Schildkrote/open-ai-gateway/internal/mockupstream"
+	"github.com/Schildkrote/open-ai-gateway/internal/policy"
+	"github.com/Schildkrote/open-ai-gateway/internal/ratelimit"
 )
 
 func newTestGateway(t *testing.T, rules []policy.Rule, buf *bytes.Buffer) *Gateway {

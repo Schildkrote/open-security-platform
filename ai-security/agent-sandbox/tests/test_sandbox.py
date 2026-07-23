@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from agent_sandbox import Sandbox, CommandPolicy, EgressPolicy, Limits
+from agent_sandbox import CommandPolicy, EgressPolicy, Limits, Sandbox
 from agent_sandbox import filesystem as fs
 
 

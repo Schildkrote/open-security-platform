@@ -7,10 +7,10 @@ import (
 	"log"
 	"os"
 
-	"github.com/example/attack-path/internal/analysis"
-	"github.com/example/attack-path/internal/ingest"
-	"github.com/example/attack-path/internal/path"
-	"github.com/example/attack-path/internal/render"
+	"github.com/Schildkrote/attack-path/internal/analysis"
+	"github.com/Schildkrote/attack-path/internal/ingest"
+	"github.com/Schildkrote/attack-path/internal/path"
+	"github.com/Schildkrote/attack-path/internal/render"
 )
 
 func main() {

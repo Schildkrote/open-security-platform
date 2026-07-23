@@ -1,14 +1,20 @@
-# Default owners for everything in the repo
-*                       @open-security-platform/maintainers
+# CODEOWNERS
+#
+# NOTE: Per-portfolio GitHub teams do not exist yet. Until they are created,
+# ownership falls back to the repository owner below. Once the teams exist,
+# uncomment the relevant lines and update MAINTAINERS.md to match.
 
-# Portfolio owners
-/identity/              @open-security-platform/identity
-/ai-security/           @open-security-platform/ai-security
-/ai-governance/         @open-security-platform/ai-governance
-/offensive/             @open-security-platform/offensive
-/soc/                   @open-security-platform/soc
+# Default owner for everything in the repo
+*                       @Schildkrote
+
+# Portfolio owners (TODO: create these teams, then uncomment)
+# /identity/              @Schildkrote/identity
+# /ai-security/           @Schildkrote/ai-security
+# /ai-governance/         @Schildkrote/ai-governance
+# /offensive/             @Schildkrote/offensive
+# /soc/                   @Schildkrote/soc
 
 # Repo-level tooling
-/.github/               @open-security-platform/maintainers
-/Makefile               @open-security-platform/maintainers
-/go.work                @open-security-platform/maintainers
+/.github/               @Schildkrote
+/Makefile               @Schildkrote
+/go.work                @Schildkrote

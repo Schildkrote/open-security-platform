@@ -1,7 +1,7 @@
 """The evaluation harness: run attacks against a target and score the results."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 
 from .attacks import ATTACK_LIBRARY, AttackCase
 from .detectors import REGISTRY

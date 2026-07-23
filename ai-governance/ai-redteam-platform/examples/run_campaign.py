@@ -1,8 +1,14 @@
 """Demo: run an authorized red-team campaign and print reports."""
 from ai_redteam_platform import (
-    connect, register_target, set_authorization, MockTarget, SafeRunner,
-    technical_report, executive_report, compliance_report, verify_chain,
+    MockTarget,
+    SafeRunner,
+    compliance_report,
+    connect,
+    executive_report,
     redteam_available,
+    register_target,
+    set_authorization,
+    verify_chain,
 )
 
 conn = connect()

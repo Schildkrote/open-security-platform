@@ -12,7 +12,13 @@
     "soc/open-soar"
   ],
   "scripts": {
-    "test": "npm test --workspaces --if-present"
+    "test": "npm test --workspaces --if-present",
+    "lint:ts": "biome ci identity/agent-identity ai-security/ai-access-broker ai-security/mcp-security-gateway offensive/pentest-manager soc/open-soar"
   },
-  "engines": { "node": ">=22.6" }
+  "engines": {
+    "node": ">=22.6"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.5"
+  }
 }

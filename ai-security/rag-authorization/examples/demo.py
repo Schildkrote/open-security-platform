@@ -1,7 +1,12 @@
 """Demo: authorized retrieval and overexposure detection."""
 from rag_authz import (
-    Sensitivity, User, Document, DocumentStore, VectorStore,
-    AuthorizedRetriever, detect_overexposure,
+    AuthorizedRetriever,
+    Document,
+    DocumentStore,
+    Sensitivity,
+    User,
+    VectorStore,
+    detect_overexposure,
 )
 
 docs = DocumentStore()

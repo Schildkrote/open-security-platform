@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/example/open-ai-gateway/internal/policy"
-	"github.com/example/open-ai-gateway/internal/ratelimit"
-	"github.com/example/open-ai-gateway/internal/registry"
+	"github.com/Schildkrote/open-ai-gateway/internal/policy"
+	"github.com/Schildkrote/open-ai-gateway/internal/ratelimit"
+	"github.com/Schildkrote/open-ai-gateway/internal/registry"
 )
 
 type Config struct {

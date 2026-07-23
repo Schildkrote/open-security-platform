@@ -7,9 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/example/open-pam-jit/internal/access"
-	"github.com/example/open-pam-jit/internal/audit"
-	"github.com/example/open-pam-jit/internal/vault"
+	"github.com/Schildkrote/open-pam-jit/internal/access"
+	"github.com/Schildkrote/open-pam-jit/internal/audit"
+	"github.com/Schildkrote/open-pam-jit/internal/vault"
 )
 
 func newTestServer(t *testing.T) http.Handler {

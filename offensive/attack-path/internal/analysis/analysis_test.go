@@ -3,8 +3,8 @@ package analysis
 import (
 	"testing"
 
-	"github.com/example/attack-path/internal/graph"
-	"github.com/example/attack-path/internal/path"
+	"github.com/Schildkrote/attack-path/internal/graph"
+	"github.com/Schildkrote/attack-path/internal/path"
 )
 
 func buildTwoPaths() *graph.Graph {

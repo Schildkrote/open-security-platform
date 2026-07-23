@@ -1,3 +1,3 @@
-module github.com/example/open-pam-jit
+module github.com/Schildkrote/open-pam-jit
 
 go 1.26

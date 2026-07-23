@@ -1,9 +1,17 @@
 import unittest
 
 from purple_team import (
-    TECHNIQUES, by_id, tactics, SAFE_TESTS, DETECTION_RULES, MockSIEM,
-    coverage_matrix, gaps, coverage_percent, recommendations,
-    run_exercise, coverage_report,
+    SAFE_TESTS,
+    TECHNIQUES,
+    MockSIEM,
+    by_id,
+    coverage_matrix,
+    coverage_percent,
+    coverage_report,
+    gaps,
+    recommendations,
+    run_exercise,
+    tactics,
 )
 
 
