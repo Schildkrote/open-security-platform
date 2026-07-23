@@ -57,10 +57,10 @@ func DOT(g *graph.Graph, paths []path.Path) string {
 
 // Report bundles paths and remediation for JSON/text output.
 type Report struct {
-	Scenario    string                     `json:"scenario"`
-	PathCount   int                        `json:"path_count"`
-	Paths       []path.Path                `json:"paths"`
-	Remediation []analysis.Recommendation  `json:"remediation"`
+	Scenario    string                    `json:"scenario"`
+	PathCount   int                       `json:"path_count"`
+	Paths       []path.Path               `json:"paths"`
+	Remediation []analysis.Recommendation `json:"remediation"`
 }
 
 // JSON renders the full report as JSON.

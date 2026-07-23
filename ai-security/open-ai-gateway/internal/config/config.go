@@ -11,16 +11,16 @@ import (
 )
 
 type Config struct {
-	Listen         string           `json:"listen"`
-	UpstreamURL    string           `json:"upstream_url"`
-	UseMockUpstream bool            `json:"use_mock_upstream"`
-	RedactRequest  bool             `json:"redact_request"`
-	RedactResponse bool             `json:"redact_response"`
-	AuditFile      string           `json:"audit_file"`
-	DefaultAction  policy.Action    `json:"default_action"`
-	Rules          []policy.Rule    `json:"rules"`
-	Limits         ratelimit.Limits `json:"limits"`
-	Tools          []registry.Tool  `json:"tools"`
+	Listen          string           `json:"listen"`
+	UpstreamURL     string           `json:"upstream_url"`
+	UseMockUpstream bool             `json:"use_mock_upstream"`
+	RedactRequest   bool             `json:"redact_request"`
+	RedactResponse  bool             `json:"redact_response"`
+	AuditFile       string           `json:"audit_file"`
+	DefaultAction   policy.Action    `json:"default_action"`
+	Rules           []policy.Rule    `json:"rules"`
+	Limits          ratelimit.Limits `json:"limits"`
+	Tools           []registry.Tool  `json:"tools"`
 }
 
 func Default() Config {

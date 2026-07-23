@@ -7,7 +7,7 @@ style `FLAG{...}` when successfully exploited.
 
 > **These are training targets.** They bind to `127.0.0.1` only, use fake
 > secrets, and must never be deployed anywhere reachable. Use them with
-> authorized testing tools such as [`ai-redteam-platform`](../ai-redteam-platform).
+> authorized testing tools such as [`ai-redteam-platform`](../../ai-governance/ai-redteam-platform).
 
 ## Apps
 

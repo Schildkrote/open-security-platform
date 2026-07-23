@@ -51,7 +51,7 @@ curl localhost:8090/compliance/<CID>
 curl localhost:8090/evidence/verify
 ```
 
-Test a target from the [`agent-redteam-range`](../agent-redteam-range): register
+Test a target from the [`agent-redteam-range`](../../offensive/agent-redteam-range): register
 it with `"endpoint":"http://localhost:8091"` and run a campaign — the runner
 calls its `/complete` endpoint (localhost only).
 

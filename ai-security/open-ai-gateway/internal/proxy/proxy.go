@@ -36,13 +36,13 @@ type chatResponse struct {
 
 // Gateway holds the dependencies for request handling.
 type Gateway struct {
-	UpstreamURL   string
-	Engine        *policy.Engine
-	Limiter       *ratelimit.Limiter
-	Audit         *audit.Logger
-	RedactRequest bool // always redact request bodies (in addition to policy)
+	UpstreamURL    string
+	Engine         *policy.Engine
+	Limiter        *ratelimit.Limiter
+	Audit          *audit.Logger
+	RedactRequest  bool // always redact request bodies (in addition to policy)
 	RedactResponse bool
-	Client        *http.Client
+	Client         *http.Client
 }
 
 func (g *Gateway) client() *http.Client {
