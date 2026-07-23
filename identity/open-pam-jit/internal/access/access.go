@@ -11,8 +11,16 @@ import (
 	"time"
 
 	"github.com/Schildkrote/open-pam-jit/internal/audit"
-	"github.com/Schildkrote/open-pam-jit/internal/vault"
 )
+
+// SecretStore is the swappable secrets backend (Phase 3). The local encrypted
+// vault (internal/vault) and the OpenBao connector (internal/bao) both satisfy
+// it, so credentials can live in OpenBao without changing the access logic.
+type SecretStore interface {
+	Put(name, secret string) error
+	Get(name string) (string, error)
+	Delete(name string)
+}
 
 type Target struct {
 	ID   string `json:"id"`
@@ -43,7 +51,7 @@ type Credential struct {
 
 type Manager struct {
 	mu       sync.Mutex
-	vault    *vault.Vault
+	vault    SecretStore
 	audit    *audit.Logger
 	targets  map[string]Target
 	requests map[string]*Request
@@ -51,7 +59,7 @@ type Manager struct {
 	now      func() time.Time
 }
 
-func NewManager(v *vault.Vault, a *audit.Logger) *Manager {
+func NewManager(v SecretStore, a *audit.Logger) *Manager {
 	return &Manager{
 		vault:    v,
 		audit:    a,
