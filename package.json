@@ -1,0 +1,18 @@
+{
+  "name": "open-security-platform",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Open-source security platform monorepo: identity, AI security, AI governance, offensive security, and SOC components.",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "identity/agent-identity",
+    "ai-security/ai-access-broker",
+    "ai-security/mcp-security-gateway",
+    "offensive/pentest-manager",
+    "soc/open-soar"
+  ],
+  "scripts": {
+    "test": "npm test --workspaces --if-present"
+  },
+  "engines": { "node": ">=22.6" }
+}

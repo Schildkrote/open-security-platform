@@ -1,0 +1,19 @@
+run:
+  timeout: 5m
+
+linters:
+  disable-all: true
+  enable:
+    - govet
+    - ineffassign
+    - unused
+    - gosimple
+    - staticcheck
+    - misspell
+
+issues:
+  exclude-dirs:
+    - node_modules
+    - site
+  max-issues-per-linter: 0
+  max-same-issues: 0

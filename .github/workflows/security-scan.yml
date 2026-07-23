@@ -1,0 +1,53 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  go-vuln:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      matrix:
+        dir:
+          - identity/oiaf
+          - identity/open-pam-jit
+          - ai-security/open-ai-gateway
+          - offensive/attack-path
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          (cd ${{ matrix.dir }} && "$(go env GOPATH)/bin/govulncheck" ./... || true)
+
+  npm-audit:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      matrix:
+        dir:
+          - identity/agent-identity
+          - ai-security/ai-access-broker
+          - ai-security/mcp-security-gateway
+          - offensive/pentest-manager
+          - soc/open-soar
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: npm audit
+        working-directory: ${{ matrix.dir }}
+        run: npm audit --audit-level=high || true

@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir:
+          - identity/oiaf
+          - identity/open-pam-jit
+          - ai-security/open-ai-gateway
+          - offensive/attack-path
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Vet
+        working-directory: ${{ matrix.dir }}
+        run: go vet ./...
+      - name: Build
+        working-directory: ${{ matrix.dir }}
+        run: go build ./...
+      - name: Test
+        working-directory: ${{ matrix.dir }}
+        run: go test ./...
+
+  node:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir:
+          - identity/agent-identity
+          - ai-security/ai-access-broker
+          - ai-security/mcp-security-gateway
+          - offensive/pentest-manager
+          - soc/open-soar
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Test
+        working-directory: ${{ matrix.dir }}
+        run: npm test
+
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir:
+          - ai-security/rag-authorization
+          - ai-security/agent-sandbox
+          - ai-governance/ai-compliance-hub
+          - ai-governance/ai-redteam-evals
+          - ai-governance/ai-redteam-platform
+          - offensive/purple-team
+          - offensive/agent-redteam-range
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test
+        working-directory: ${{ matrix.dir }}
+        run: python -m unittest discover -s tests

@@ -1,0 +1,14 @@
+# Default owners for everything in the repo
+*                       @open-security-platform/maintainers
+
+# Portfolio owners
+/identity/              @open-security-platform/identity
+/ai-security/           @open-security-platform/ai-security
+/ai-governance/         @open-security-platform/ai-governance
+/offensive/             @open-security-platform/offensive
+/soc/                   @open-security-platform/soc
+
+# Repo-level tooling
+/.github/               @open-security-platform/maintainers
+/Makefile               @open-security-platform/maintainers
+/go.work                @open-security-platform/maintainers
