@@ -11,6 +11,7 @@ import (
 	"github.com/Schildkrote/open-pam-jit/internal/access"
 	"github.com/Schildkrote/open-pam-jit/internal/api"
 	"github.com/Schildkrote/open-pam-jit/internal/audit"
+	"github.com/Schildkrote/open-pam-jit/internal/bao"
 	"github.com/Schildkrote/open-pam-jit/internal/vault"
 	"github.com/Schildkrote/platform/auth"
 	"github.com/Schildkrote/platform/events"
@@ -24,11 +25,20 @@ func main() {
 	authSecret := flag.String("auth-secret", "", "shared JWT secret; when set, protects all API routes except /healthz (opt-in)")
 	flag.Parse()
 
-	// NOTE: a real deployment uses a random salt stored in a KMS/HSM.
-	salt := []byte("open-pam-jit-demo-salt")
-	v, err := vault.New(*passphrase, salt)
-	if err != nil {
-		log.Fatalf("vault: %v", err)
+	// Secrets backend (Phase 3): OpenBao when BAO_ADDR + BAO_TOKEN are set,
+	// otherwise the local encrypted vault (offline default).
+	var store access.SecretStore
+	if addr, token := os.Getenv("BAO_ADDR"), os.Getenv("BAO_TOKEN"); addr != "" && token != "" {
+		store = bao.NewClient(addr, token)
+		log.Printf("secrets backend: OpenBao (%s)", addr)
+	} else {
+		// NOTE: a real deployment uses a random salt stored in a KMS/HSM.
+		salt := []byte("open-pam-jit-demo-salt")
+		v, err := vault.New(*passphrase, salt)
+		if err != nil {
+			log.Fatalf("vault: %v", err)
+		}
+		store = v
 	}
 
 	f, err := os.OpenFile(*auditFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -38,7 +48,7 @@ func main() {
 	defer f.Close()
 	auditLogger := audit.New(f)
 
-	mgr := access.NewManager(v, auditLogger)
+	mgr := access.NewManager(store, auditLogger)
 	mgr.AddTarget(access.Target{ID: "prod-db", Name: "Production Database", Type: "database"})
 	mgr.AddTarget(access.Target{ID: "prod-ssh", Name: "Production SSH", Type: "ssh"})
 
