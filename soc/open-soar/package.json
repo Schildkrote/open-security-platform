@@ -6,7 +6,7 @@
   "private": true,
   "scripts": {
     "start": "node --experimental-strip-types --no-warnings src/server.ts",
-    "test": "node --experimental-strip-types --no-warnings --test test/unit.test.ts test/integration.test.ts test/repository.test.ts test/connectors.test.ts"
+    "test": "node --experimental-strip-types --no-warnings --test test/unit.test.ts test/integration.test.ts test/repository.test.ts test/connectors.test.ts test/ingest.test.ts"
   },
   "engines": { "node": ">=22.6" },
   "license": "Apache-2.0"
