@@ -13,6 +13,7 @@ import (
 	"github.com/Schildkrote/open-ai-gateway/internal/config"
 	"github.com/Schildkrote/open-ai-gateway/internal/mockupstream"
 	"github.com/Schildkrote/open-ai-gateway/internal/policy"
+	"github.com/Schildkrote/open-ai-gateway/internal/provider"
 	"github.com/Schildkrote/open-ai-gateway/internal/proxy"
 	"github.com/Schildkrote/open-ai-gateway/internal/ratelimit"
 	"github.com/Schildkrote/open-ai-gateway/internal/registry"
@@ -28,11 +29,22 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	// Offline mock upstream so the gateway runs with zero network access.
-	if cfg.UseMockUpstream {
-		srv := httptest.NewServer(mockupstream.Handler())
-		cfg.UpstreamURL = srv.URL
-		log.Printf("mock upstream listening at %s", srv.URL)
+	// LLM provider selection (Phase 3 connectors). Default = offline mock upstream
+	// so the gateway runs with zero network access; set OSP_LLM_PROVIDER to
+	// openai|anthropic|ollama to proxy to a real provider (credentials via env).
+	var authorize func(*http.Request)
+	switch name := os.Getenv("OSP_LLM_PROVIDER"); name {
+	case "", "mock":
+		if cfg.UseMockUpstream {
+			srv := httptest.NewServer(mockupstream.Handler())
+			cfg.UpstreamURL = srv.URL
+			log.Printf("mock upstream listening at %s", srv.URL)
+		}
+	default:
+		p := provider.FromEnv(name, cfg.UpstreamURL)
+		cfg.UpstreamURL = p.Endpoint()
+		authorize = p.Authorize
+		log.Printf("LLM provider %s -> %s", p.Name(), cfg.UpstreamURL)
 	}
 
 	engine := &policy.Engine{Default: cfg.DefaultAction, Rules: cfg.Rules}
@@ -58,6 +70,7 @@ func main() {
 		Audit:          auditLogger,
 		RedactRequest:  cfg.RedactRequest,
 		RedactResponse: cfg.RedactResponse,
+		Authorize:      authorize,
 	}
 
 	mux := http.NewServeMux()
