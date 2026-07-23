@@ -43,6 +43,7 @@ type Gateway struct {
 	RedactRequest  bool // always redact request bodies (in addition to policy)
 	RedactResponse bool
 	Client         *http.Client
+	Authorize      func(*http.Request) // optional provider auth (Phase 3 LLM connectors)
 }
 
 func (g *Gateway) client() *http.Client {
@@ -106,6 +107,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	upReq.Header.Set("Content-Type", "application/json")
+	if g.Authorize != nil {
+		g.Authorize(upReq)
+	}
 	resp, err := g.client().Do(upReq)
 	if err != nil {
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
