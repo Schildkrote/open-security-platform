@@ -15,7 +15,7 @@ export interface Case {
   created_at: string;
 }
 
-function rowToCase(row: Record<string, unknown>): Case {
+export function rowToCase(row: Record<string, unknown>): Case {
   return {
     id: row.id as string,
     title: row.title as string,

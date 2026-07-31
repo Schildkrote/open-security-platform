@@ -47,6 +47,22 @@ curl localhost:8086/playbooks           # list playbooks
 npm test
 ```
 
+## Persistence backends
+
+Cases and the audit chain sit behind repository interfaces
+(`src/repository.ts`), so the storage backend swaps without touching callers:
+
+- **SQLite (default, offline):** `SqliteCaseRepository` on the built-in
+  `node:sqlite` — no setup; used by `npm start` and the tests.
+- **Postgres (production):** `PostgresCaseRepository` talks to a
+  [PostgREST](https://postgrest.org)-style REST gateway in front of Postgres via
+  `src/pg_gateway.ts` (global `fetch`, zero runtime dependencies). Apply
+  `migrations/0001_init.sql`, run a gateway against the database, and select it
+  with `OSP_SOAR_GATEWAY=http://…` (optional `OSP_SOAR_GATEWAY_TOKEN`). Because
+  `node:sqlite` is sync and HTTP is async, the Postgres repositories are an async
+  mirror of the SQLite interface; wiring them into the HTTP server is in progress
+  (see `NEXT_STEPS.md`).
+
 ## License
 
 Apache-2.0
