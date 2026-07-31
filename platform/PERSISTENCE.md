@@ -50,12 +50,21 @@ Callers depend on `CaseRepository`; today they get `SqliteCaseRepository`. A
 `PostgresCaseRepository` implementing the same interface is the production
 backend — no caller changes.
 
+> **Node async caveat:** `node:sqlite` is synchronous, so the SQLite repositories
+> are sync. Postgres over HTTP is inherently async, so in Node the Postgres
+> backend implements an **async mirror** (`AsyncCaseRepository` /
+> `AsyncAuditRepository`) rather than the sync interface. The row mapping
+> (`cases.rowToCase`) and hash-chain algorithm (`audit.auditHash`/`auditPayload`)
+> are shared, so a chain written by one backend verifies in the other.
+
 ## Per-language backends
 
 - **Node/TS:** `node:sqlite` (`DatabaseSync`, built into Node ≥22.6) for the
-  SQLite backend; `pg` (or a thin HTTP client to a Postgres REST gateway) for
-  Postgres. Zero-dep constraint applies to *runtime* deps — the SQLite backend
-  uses only the built-in module.
+  SQLite backend. For Postgres we use a **thin HTTP client to a PostgREST-style
+  REST gateway** (`soc/open-soar/src/pg_gateway.ts`, global `fetch`) rather than
+  the `pg` driver, so the zero-runtime-dep rule holds. (Because `node:sqlite` is
+  sync but HTTP is async, the Node Postgres backend is the async mirror described
+  above.)
 - **Python:** stdlib `sqlite3` for SQLite; `psycopg`/`asyncpg` for Postgres
   (optional dependency, gated behind the Real backend).
 - **Go:** `database/sql` with a driver. The stdlib-only Go components keep
@@ -68,13 +77,19 @@ backend — no caller changes.
 2. Keep the SQLite backend as the offline/test default.
 3. Add a Postgres backend implementing the same interface + per-component
    migrations (SQL files under `<component>/migrations/`).
-4. Select the backend via config/env (e.g. `OSP_DB=postgres://…`); default stays
-   SQLite so `make verify` remains green offline.
+4. Select the backend via config/env (e.g. `OSP_SOAR_GATEWAY=http://…` for the
+   Node HTTP-gateway backend, or `OSP_DB=postgres://…` for a driver backend);
+   the default stays SQLite so `make verify` remains green offline.
 
 ## Status
 
 - **open-soar:** `CaseRepository` + `SqliteCaseRepository` (+ `AuditRepository`)
-  — reference implementation, tested.
+  — reference implementation, tested. **Postgres backend added:** async
+  `PostgresCaseRepository`/`PostgresAuditRepository` over a zero-dep
+  PostgREST-style gateway (`src/pg_gateway.ts`), schema in `migrations/`, backend
+  selected via `OSP_SOAR_GATEWAY`, and a mock-gateway test proving the seam
+  offline (including cross-backend chain verification). Wiring the async backend
+  into `server.ts` is the follow-up.
 - Other components: most already persist to SQLite/single-node stores; adopting
   the explicit repository interface is incremental follow-up work. Shared
   Postgres + multi-tenancy land with the production backend.

@@ -19,7 +19,11 @@
 - Map cases to frameworks via `ai-compliance-hub` (incident-response evidence).
 
 ## Platform
-- Postgres persistence, HA, RBAC, multi-tenant workspaces.
+- Postgres persistence: gateway-backed **async repositories + migrations exist**
+  (`src/pg_gateway.ts`, `src/repository.ts`, `migrations/`); next **wire them
+  into `server.ts`** (migrate the sync call sites to the async interface) and
+  exercise against a real PostgREST + Postgres. Then HA, RBAC, multi-tenant
+  workspaces.
 - OpenTelemetry tracing of playbook runs; queue-based workers.
 - Integrate `agent-identity` so automated actions are authorized and audited,
   and `agent-sandbox` to safely run response scripts.
