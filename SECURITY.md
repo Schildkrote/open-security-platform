@@ -27,6 +27,16 @@ fake-secret scope.
   deployment.
 - Offensive components enforce authorization gates and avoid destructive or
   evasive behavior by design.
+- **`--live` gate:** by default all offensive components run offline against
+  mocks and make no external calls. Four policy exceptions — active
+  attack-surface scanning, account-recovery/account-existence probing,
+  people-search aggregation, and authenticated platform scraping — are
+  default-off, opt-in per invocation via `--live <feature>`, and subject to
+  the per-feature conditions in the AGENTS.md safety model (explicit scope,
+  read-only or single state-changing request per identifier, rate limits,
+  redacted/hashed PII, tamper-evident audit logs, run caps). The gate state is
+  printed at the start of every run that enables one. Reporters: a live-gated
+  feature run without its documented conditions is in scope for reporting.
 
 ## Supported Versions
 

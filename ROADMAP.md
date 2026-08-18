@@ -30,6 +30,16 @@ has its own detailed `NEXT_STEPS.md`.
 - **Exercise Real connector paths** against local instances (docker-compose) of
   Keycloak/Wazuh/DefectDojo/OpenBao; confirm the Mock↔Real seam end to end.
 - Publish per-component documentation in the aggregated docs site.
+- **Offensive OSINT expansion:** `offensive/username-enum` (username
+  enumeration), Shodan dorks in `offensive/attack-path`,
+  `offensive/credential-intel` (breach lookups), passive domain intelligence +
+  OSINT source taxonomy, and IP/phone geo enrichment — all mock-first with
+  real connectors behind the `--live` gate where egress is required.
+- **`--live` gate rollout:** implement the four policy exceptions (active
+  scanning, recovery probing, people search, authenticated scraping) with
+  `platform/livegate`; each ships a mock mode that runs offline and a real
+  mode gated behind `--live <feature>` with per-feature conditions (see
+  AGENTS.md safety model).
 
 ## Next
 

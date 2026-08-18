@@ -13,6 +13,7 @@ nav:
   - AI Security: ai-security.md
   - AI Governance: ai-governance.md
   - Offensive: offensive.md
+  - Offensive OSINT Taxonomy: osint.md
   - SOC: soc.md
   - Contributing: contributing.md
 
