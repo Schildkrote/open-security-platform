@@ -6,4 +6,7 @@ use (
 	./identity/open-pam-jit
 	./ai-security/open-ai-gateway
 	./offensive/attack-path
+	./offensive/username-enum
+	./offensive/credential-intel
+	./offensive/live-recon
 )
