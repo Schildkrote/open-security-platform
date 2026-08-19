@@ -29,10 +29,17 @@ Not a Palantir clone; not a Flock clone; not untargeted surveillance.
 ## Scaffold honesty (v0.1)
 
 - Tag: **v0.1-scaffold**. `make verify` green ≠ production Ontology OS.
-- Durable store is **in-memory + JSON snapshot** only (no SQLite/Postgres yet).
-- Jurisdiction **packs** load in tests/e2e demos; `connectors/alpr`, `platform/actions`,
-  and `apps/webhook` default paths use core `policy.Evaluate` **without** packing
-  packs into the hot path. Wire `packs.Engine` before claiming pack enforcement everywhere.
+- Durable store is **in-memory + JSON snapshot + SQLite** (`.sqlite` store path
+  auto-selected by `apps/webhook`; `ontology.SaveSQLite/LoadSQLite`, pure-Go
+  `modernc.org/sqlite`). No Postgres yet.
+- Jurisdiction **packs** are wired into the hot path: `connectors/alpr`,
+  `platform/actions`, and `apps/webhook` each accept an optional `packs.Engine`
+  (nil = core `policy.Evaluate`, backward compatible); `apps/webhook` loads
+  packs via `--packs <dir>` and gates every event with `--purpose`/`--role`
+  policy context. Integration tests pin pack outcomes against core-policy
+  controls.
+- OBP biometric match hits arrive via the typed `connector-obp` path
+  (BiometricHit + Person(pseudo), no raw pixels); see OBP `docs/obp-odp-bridge.md`.
 - OSP/OBP connectors are **normalize-in libraries + fixtures**; no live bus to those repos.
 - `deploy/` is **not shipped** (Apollo/air-gap notes are aspirational).
 - Prefer connecting OSP/OBP over reimplementing them.
