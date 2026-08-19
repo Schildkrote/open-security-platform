@@ -1,9 +1,17 @@
 # open-security-platform — polyglot monorepo orchestration.
 # Fans out build/test/lint across Go, Node/TS and Python components.
 
-GO_DIRS   := platform identity/oiaf identity/open-pam-jit ai-security/open-ai-gateway offensive/attack-path offensive/username-enum offensive/credential-intel offensive/live-recon
+GO_DIRS   := platform identity/oiaf identity/open-pam-jit ai-security/open-ai-gateway offensive/attack-path offensive/username-enum offensive/credential-intel offensive/live-recon \
+	biometric/platform/lawful-basis biometric/platform/biometric-audit biometric/biometric-rbr biometric/biometric-graph \
+	decision/platform/ontology decision/platform/policy decision/platform/audit decision/platform/actions \
+	decision/platform/events decision/platform/packs decision/platform/aip \
+	decision/connectors/osp decision/connectors/obp decision/connectors/alpr decision/connectors/osint \
+	decision/apps/graph decision/apps/dossier decision/apps/ingest decision/apps/webhook decision/apps/contextbundle \
+	decision/integration
 NODE_DIRS := identity/agent-identity ai-security/ai-access-broker ai-security/mcp-security-gateway offensive/pentest-manager soc/open-soar
-PY_DIRS   := ai-security/rag-authorization ai-security/agent-sandbox ai-governance/ai-compliance-hub ai-governance/ai-redteam-evals ai-governance/ai-redteam-platform offensive/purple-team offensive/agent-redteam-range
+PY_DIRS   := ai-security/rag-authorization ai-security/agent-sandbox ai-governance/ai-compliance-hub ai-governance/ai-redteam-evals ai-governance/ai-redteam-platform offensive/purple-team offensive/agent-redteam-range \
+	biometric/platform/basis-matrix biometric/platform/audit-log biometric/biometric-categorise biometric/biometric-scrape \
+	biometric/biometric-train biometric/biometric-cctv biometric/integration
 
 .PHONY: help test test-go test-node test-python build build-go lint fmt verify integration docs clean list
 
