@@ -1,7 +1,7 @@
 # open-decision-platform
 
 GO_DIRS := platform/ontology platform/policy platform/audit platform/actions \
-	platform/events platform/packs platform/aip \
+	platform/events platform/packs platform/aip platform/social-scoring platform/credibility \
 	connectors/osp connectors/obp connectors/alpr connectors/osint \
 	apps/graph apps/dossier apps/ingest apps/webhook apps/contextbundle \
 	integration
