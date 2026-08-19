@@ -28,8 +28,7 @@ Honest status, mock vs real.
 - **Audit log:** results are printed, not yet written to a tamper-evident
   hash-chained log (the `platform/audit` backbone integration is the next
   step, consistent with the repo's "enforce the backbone in-component" item).
-- **Shared `platform/livegate`:** this component validates features against
-  its own list; wire `platform/livegate.Parse` / `Summary` so the gate is
+- **Shared `platform/livegate`:** wired via `livegate.Parse` / `Summary`. Remaining:
   canonical across all live features.
 
 ## Safety
@@ -38,3 +37,8 @@ Honest status, mock vs real.
 - Credentials in env/`-credential` only; never in argv defaults or logs.
 - People-search always requires `-consent`.
 - CI stays offline (mock + httptest only).
+
+## Honesty update
+
+- CLI now calls shared `platform/livegate.Parse` / `Summary` for live paths.
+- Mock/default remains offline with gate off.

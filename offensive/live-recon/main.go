@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/Schildkrote/live-recon/internal/probe"
+
+	"github.com/Schildkrote/platform/livegate"
 )
 
 func main() {
@@ -43,7 +45,7 @@ func main() {
 	}
 	printGate(enabled)
 
-	if !probe.Enabled(enabled, *feature) {
+	if !livegate.Enabled(enabled, *feature) {
 		if *real {
 			log.Fatalf("feature %q is not enabled (pass -live %s)", *feature, *feature)
 		}
@@ -53,7 +55,7 @@ func main() {
 
 	var runner probe.Runner
 	switch {
-	case *real && probe.Enabled(enabled, *feature):
+	case *real && livegate.Enabled(enabled, *feature):
 		runner = probe.RealRunners()[*feature]
 	default:
 		runner = probe.MockRunners()[*feature]
@@ -85,53 +87,14 @@ func main() {
 	}
 }
 
-// parseLive splits a comma-separated feature list, validating each.
+// parseLive uses the shared platform/livegate parser (single source of truth).
 func parseLive(spec string) ([]string, error) {
-	if spec == "" {
-		return nil, nil
-	}
-	seen := map[string]bool{}
-	var out []string
-	for _, raw := range strings.Split(spec, ",") {
-		f := strings.TrimSpace(raw)
-		if f == "" {
-			continue
-		}
-		if !validFeature(f) {
-			return nil, fmt.Errorf("unknown feature %q (valid: %s)", f, strings.Join(probe.AllFeatures(), ", "))
-		}
-		if !seen[f] {
-			seen[f] = true
-			out = append(out, f)
-		}
-	}
-	return out, nil
-}
-
-func validFeature(f string) bool {
-	for _, v := range probe.AllFeatures() {
-		if v == f {
-			return true
-		}
-	}
-	return false
+	return livegate.Parse(spec)
 }
 
 // printGate shows the live-gate state at the start of every run.
 func printGate(enabled []string) {
-	fmt.Fprintln(os.Stderr, "live-gate: "+gateSummary(enabled))
-}
-
-func gateSummary(enabled []string) string {
-	var parts []string
-	for _, f := range probe.AllFeatures() {
-		state := "off"
-		if probe.Enabled(enabled, f) {
-			state = "ON"
-		}
-		parts = append(parts, fmt.Sprintf("%s=%s", f, state))
-	}
-	return strings.Join(parts, " ")
+	fmt.Fprint(os.Stderr, livegate.Summary(enabled))
 }
 
 func renderText(res *probe.ProbeResult) string {

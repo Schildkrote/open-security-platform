@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/Schildkrote/credential-intel/internal/source"
+
+	"github.com/Schildkrote/platform/livegate"
 )
 
 func main() {
@@ -23,6 +25,7 @@ func main() {
 	breaches := flag.Bool("breaches", false, "hibp mode: also fetch the breach list for the identifier")
 	format := flag.String("format", "text", "output: text | json")
 	mockFile := flag.String("mock-file", "", "mock source: JSON file with sample breaches")
+	live := flag.String("live", "", "comma-separated livegate features (hibp requires people-search or leave empty to allow with notice-only legacy; prefer -live people-search for PII lookups)")
 	flag.Parse()
 
 	if *ident == "" {
@@ -51,8 +54,21 @@ func main() {
 		log.Fatalf("unknown -mode %q (mock|hibp)", *mode)
 	}
 
+	enabled, err := livegate.Parse(*live)
+	if err != nil {
+		log.Fatalf("-live: %v", err)
+	}
 	if *mode == "hibp" {
-		fmt.Fprintln(os.Stderr, "live-gate: credential-intel/hibp (k-anonymity range request; only SHA-1 prefix leaves the machine)")
+		// HIBP is outbound network. Require an explicit livegate acknowledgment.
+		// Closest registered exception is people-search (PII-adjacent lookup);
+		// k-anonymity still applies in the HIBP client (prefix only).
+		if !livegate.Enabled(enabled, livegate.FeaturePeopleSearch) {
+			log.Fatal("hibp mode is live-gated: pass -live people-search (and optional subject consent ops policy). Mock mode needs no gate.")
+		}
+		fmt.Fprint(os.Stderr, livegate.Summary(enabled))
+		fmt.Fprintln(os.Stderr, "credential-intel/hibp: k-anonymity range request; only SHA-1 prefix leaves the machine")
+	} else if len(enabled) > 0 {
+		fmt.Fprint(os.Stderr, livegate.Summary(enabled))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

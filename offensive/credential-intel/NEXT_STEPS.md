@@ -13,9 +13,7 @@ Honest status, mock vs real.
 
 ## What is mocked / aspirational
 
-- **Breach-detail listing** (`parseBreachList` exists but the CLI has no
-  `-breaches` flag yet) — add it and verify against a real HIBP response
-  shape.
+- **Breach-detail listing** — CLI `-breaches` exists; still verify shapes against live HIBP.
 - **Password-hash lookups** (HIBP PwnedPasswords `/range/{prefix}` with a
   SHA-1 password hash) — the source interface supports it; the CLI currently
   treats `-id` as an email. Add a `-type email|password` flag.
@@ -25,9 +23,7 @@ Honest status, mock vs real.
 - **Recovery-question answers** (DigIn / recovery-DB lookups) — the
   "password-recovery lookups" half of the feature; needs a real data source
   or an API.
-- **Live-gate integration:** `-mode hibp` prints a gate notice but does not
-  yet call `platform/livegate.Parse` / `Summary` — wire the shared gate once
-  the other live features land.
+- **Live-gate integration:** hibp requires `-live people-search` via `platform/livegate`.
 
 ## Safety
 
@@ -35,3 +31,8 @@ Honest status, mock vs real.
 - Redact the input in all logs and reports (carry the hash, not the value).
 - HIBP is read-only GETs; keep it that way.
 - CI must stay offline (mock only).
+
+## Honesty update
+
+- CLI now calls shared `platform/livegate.Parse` / `Summary` for live paths.
+- Mock/default remains offline with gate off.
