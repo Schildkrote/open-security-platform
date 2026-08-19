@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "cameras": [
+    {
+      "id": "lobby-1",
+      "rtsp_url": "mock://",
+      "holder": "alice",
+      "auth_kind": "owner_consent",
+      "purposes": ["enrolment", "training", "targeted_search"],
+      "notes": "Example only — replace with real NVR URL + credentials via env",
+      "max_fps_sample": 1,
+      "min_face_px": 40,
+      "enabled": true
+    }
+  ]
+}

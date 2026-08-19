@@ -1,0 +1,14 @@
+[
+  {
+    "id": "alice-ref-1",
+    "client_id": "alice",
+    "image_hash": "alice-ref-1",
+    "category": "general"
+  },
+  {
+    "id": "alice-ref-2",
+    "client_id": "alice",
+    "image_hash": "alice-ref-2",
+    "category": "general"
+  }
+]

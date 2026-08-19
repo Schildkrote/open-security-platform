@@ -1,0 +1,8 @@
+go 1.26
+
+use (
+	./biometric-graph
+	./biometric-rbr
+	./platform/biometric-audit
+	./platform/lawful-basis
+)
