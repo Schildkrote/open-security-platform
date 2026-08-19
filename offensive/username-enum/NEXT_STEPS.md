@@ -33,3 +33,8 @@ Honest status, mock vs real.
 - Keep probes read-only (GET/HEAD/OPTIONS only).
 - Keep `-max-probes` enforced; CI must stay offline (mock only).
 - Redact usernames in any audit log that leaves the machine.
+
+## Honesty update
+
+- CLI now calls shared `platform/livegate.Parse` / `Summary` for live paths.
+- Mock/default remains offline with gate off.

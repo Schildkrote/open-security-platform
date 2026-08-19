@@ -16,6 +16,8 @@ import (
 	"github.com/Schildkrote/username-enum/internal/engine"
 	"github.com/Schildkrote/username-enum/internal/service"
 	"github.com/Schildkrote/username-enum/internal/source"
+
+	"github.com/Schildkrote/platform/livegate"
 )
 
 func main() {
@@ -25,6 +27,7 @@ func main() {
 	maxProbes := flag.Int("max-probes", 25, "max probes per run (live run-cap)")
 	intervalMS := flag.Int("interval-ms", 200, "milliseconds between probes (http mode)")
 	format := flag.String("format", "text", "output: text | json")
+	live := flag.String("live", "", "comma-separated livegate features (http mode requires active-scanning)")
 	flag.Parse()
 
 	if *username == "" {
@@ -46,11 +49,19 @@ func main() {
 		log.Fatalf("unknown -mode %q (mock|http)", *mode)
 	}
 
-	// Live-gate note: http mode makes outbound GET requests to the service
-	// catalog, so it is the live path of this component. The mock path is
-	// fully offline. See AGENTS.md safety model for the gate conditions.
+	enabled, err := livegate.Parse(*live)
+	if err != nil {
+		log.Fatalf("-live: %v", err)
+	}
+	// http mode makes outbound GETs — require shared livegate active-scanning.
 	if *mode == "http" {
-		fmt.Fprintln(os.Stderr, "live-gate: username-enum/http (read-only GETs, scope = -services, cap = -max-probes)")
+		if !livegate.Enabled(enabled, livegate.FeatureActiveScanning) {
+			log.Fatal("http mode is live-gated: pass -live active-scanning (read-only GETs, scope=-services, cap=-max-probes). Mock mode needs no gate.")
+		}
+		fmt.Fprint(os.Stderr, livegate.Summary(enabled))
+		fmt.Fprintln(os.Stderr, "username-enum/http: read-only GETs, scope=-services, cap=-max-probes")
+	} else if len(enabled) > 0 {
+		fmt.Fprint(os.Stderr, livegate.Summary(enabled))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
