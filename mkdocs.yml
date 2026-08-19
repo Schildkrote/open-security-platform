@@ -1,0 +1,19 @@
+site_name: open-biometric-platform
+site_description: Consent-gated facial recognition for client harm reduction.
+repo_url: https://github.com/Schildkrote/open-biometric-platform
+
+theme:
+  name: mkdocs
+  locale: en
+
+nav:
+  - Home: index.md
+  - Lawful basis: lawful-basis.md
+  - Training data: training-data.md
+  - Recipes:
+      - InsightFace foundation: recipes/01-insightface-foundation.md
+      - Authorized RTSP: recipes/02-authorized-rtsp.md
+
+markdown_extensions:
+  - tables
+  - fenced_code

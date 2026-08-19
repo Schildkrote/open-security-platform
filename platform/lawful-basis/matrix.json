@@ -1,0 +1,55 @@
+{
+  "$comment": "Single source of truth for OBP lawful-basis decisions. Canonical decision order (both Go platform/lawful-basis and Python platform/basis-matrix must follow it, proven by matrix tests): (1) normalize purpose aliases and defaults; (2) unknown purpose -> prohibited; (3) hard prohibitions (untargeted_mass_id always; rbr_public without LE); (4) rbr_public LE without acknowledged DPiA -> requires_dpia; (5) special category without DPiA -> requires_dpia; (6) special category without consent (non-LE) -> requires_consent; (7) purpose rule (consent / consent+dpia); (8) permitted. Retention: RetentionMax = clamp(requested, cap); requested <= 0 stays 0; prohibited -> 0. retention_days here is the standard request callers pass.",
+  "version": 1,
+  "default_regime": "gdpr",
+  "default_category": "general",
+  "retention_max_days": {
+    "general": 90,
+    "special": 7
+  },
+  "categories": {
+    "general": { "special": false },
+    "public_figure": { "special": false },
+    "employee": { "special": false },
+    "minor": { "special": true },
+    "health_context": { "special": true },
+    "religion_context": { "special": true }
+  },
+  "purposes": {
+    "enrolment": {
+      "rule": "consent",
+      "retention_days": 30,
+      "aliases": []
+    },
+    "training": {
+      "rule": "consent",
+      "retention_days": 30,
+      "aliases": ["corpus_ingest"]
+    },
+    "targeted_search": {
+      "rule": "consent",
+      "retention_days": 30,
+      "aliases": ["client_protection"]
+    },
+    "graph_link": {
+      "rule": "consent",
+      "retention_days": 30,
+      "aliases": []
+    },
+    "cross_agency_share": {
+      "rule": "consent+dpia",
+      "retention_days": 30,
+      "aliases": []
+    },
+    "untargeted_mass_id": {
+      "rule": "prohibited",
+      "retention_days": 0,
+      "aliases": []
+    },
+    "rbr_public": {
+      "rule": "le+dpia",
+      "retention_days": 7,
+      "aliases": []
+    }
+  }
+}
