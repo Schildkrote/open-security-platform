@@ -18,4 +18,6 @@ use (
 	./platform/ontology
 	./platform/packs
 	./platform/policy
+	./platform/social-scoring
+	./platform/credibility
 )
