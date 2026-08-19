@@ -130,6 +130,21 @@ def node_server(
     )
 
 
+def oiaf_server(
+    binary: str, port: int, webhook_url: str, admin_token: str, adapter_token: str
+) -> SubprocessServer:
+    """oiafd: ``-webhooks <url>`` emits integration events onto the spine."""
+    return SubprocessServer(
+        [binary, "-webhooks", webhook_url],
+        port,
+        env={
+            "OIAF_LISTEN_ADDR": f"127.0.0.1:{port}",
+            "OIAF_ADMIN_TOKEN": admin_token,
+            "OIAF_ADAPTER_TOKEN": adapter_token,
+        },
+    )
+
+
 def go_server(
     binary: str, port: int, audit_file: str, extra_args: Optional[Sequence[str]] = None
 ) -> SubprocessServer:
