@@ -1,0 +1,21 @@
+go 1.26
+
+use (
+	./apps/contextbundle
+	./apps/dossier
+	./apps/graph
+	./apps/ingest
+	./apps/webhook
+	./connectors/alpr
+	./connectors/obp
+	./connectors/osint
+	./connectors/osp
+	./integration
+	./platform/actions
+	./platform/aip
+	./platform/audit
+	./platform/events
+	./platform/ontology
+	./platform/packs
+	./platform/policy
+)
