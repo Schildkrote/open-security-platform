@@ -5,6 +5,7 @@ package probe
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -24,8 +25,8 @@ func listenTCP(t *testing.T) (net.Listener, error) {
 
 func TestMockRunnersDeterministic(t *testing.T) {
 	m := MockRunners()
-	if len(m) != 4 {
-		t.Fatalf("want 4 mock runners, got %d", len(m))
+	if len(m) != 5 {
+		t.Fatalf("want 5 mock runners, got %d", len(m))
 	}
 	for feature, r := range m {
 		if r.Feature() != feature {
@@ -144,5 +145,87 @@ func TestRealAuthScraper(t *testing.T) {
 	}
 	if gotAuth != "Bearer sekrit" {
 		t.Fatalf("Authorization header = %q", gotAuth)
+	}
+}
+
+func TestMockRecoveryRevealConsent(t *testing.T) {
+	r := NewMockRecoveryRevealer()
+	if _, err := r.Run(context.Background(), "https://x/reveal?email={identifier}", RunOpts{Credential: "a@b.c"}); err == nil {
+		t.Fatal("reveal without consent should error")
+	}
+	res, err := r.Run(context.Background(), "https://x/reveal?email={identifier}", RunOpts{Credential: "a@b.c", Consent: true})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Feature != FeatureRecoveryReveal {
+		t.Fatalf("feature = %q", res.Feature)
+	}
+}
+
+func TestRealRecoveryReveal(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		fmt.Fprint(w, "masked: j***@example.com")
+	})}
+	go srv.Serve(ln)
+	defer srv.Close()
+
+	r := NewRecoveryRevealer()
+	res, err := r.Run(context.Background(), "http://"+ln.Addr().String()+"/reveal?email={identifier}", RunOpts{Credential: "j***@example.com", Consent: true})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.Found {
+		t.Fatal("expected found")
+	}
+}
+
+func TestExternalScanUnavailable(t *testing.T) {
+	// nmap is not installed on this dev box; the external scan must report
+	// "unavailable" (not fail) so the active-scanner degrades gracefully.
+	e := NewExternalScan()
+	e.Nmap = "/nonexistent/nmap"
+	ev, err := e.RunNmap(context.Background(), "127.0.0.1", "80")
+	if err != nil {
+		t.Fatalf("RunNmap with missing binary should not error, got: %v", err)
+	}
+	if ev["status"] != "unavailable" {
+		t.Errorf("status = %v, want unavailable", ev["status"])
+	}
+	ev, err = e.RunNuclei(context.Background(), "127.0.0.1", "80", "http/technologies/")
+	if err != nil {
+		t.Fatalf("RunNuclei with missing binary should not error, got: %v", err)
+	}
+	if ev["status"] != "unavailable" {
+		t.Errorf("status = %v, want unavailable", ev["status"])
+	}
+}
+
+func TestActiveScannerAggressiveDegrades(t *testing.T) {
+	// Start a loopback TCP listener so the TCP probe succeeds, then run the
+	// aggressive path. nmap is missing → nmap_status=unavailable, but the
+	// probe itself succeeds (Found=true) and doesn't fail.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	a := NewActiveScanner()
+	a.External = NewExternalScan()
+	a.External.Nmap = "/nonexistent/nmap"
+	res, err := a.Run(context.Background(), ln.Addr().String(), RunOpts{Aggressive: true})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.Found {
+		t.Error("expected tcp open (found)")
+	}
+	if res.Evidence["nmap_status"] != "unavailable" {
+		t.Errorf("nmap_status = %v, want unavailable", res.Evidence["nmap_status"])
 	}
 }

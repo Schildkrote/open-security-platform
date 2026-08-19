@@ -12,17 +12,19 @@ Honest status, mock vs real.
 
 ## What is mocked / aspirational
 
-- **Active scanning is minimal** (TCP connect + one GET). Real nmap/nuclei
-  integration, service-version detection, and vuln-template matching are
-  next. The safety model allows read-only probes only — exploit/DoS
-  templates stay out until a `--live aggressive` sub-gate exists.
+- **Active scanning** (TCP connect + GET) now has an **aggressive sub-gate**
+  (`-aggressive`): external `nmap -sV` service-version probe (+ optional
+  `-nuclei <templates>`). Both binaries are optional — missing binary reports
+  `unavailable`, the scan never fails. Exploit/DoS templates stay out
+  (read-only `-sV -Pn` only).
 - **Recovery prober** issues a single GET per identifier; the "at most one
   state-changing request" condition is enforced by the caller's cap, not by
   the prober itself. Add a per-identifier dedup cache (file-backed) so
   repeated runs don't re-trigger reset emails.
-- **People-search** hits one whitelisted source per run (data minimization).
-  Aggregation across multiple sources + result merging + PII redaction
-  pipeline are next.
+- **People-search** now aggregates multiple sources (`-sources a,b,c`) with a
+  redacted summary and a PII-redaction pass (email/phone masked, names
+  hashed). Contact parsing (extracting emails/phones from response HTML/JSON)
+  is still next.
 - **Auth-scraper** issues one GET; contact parsing (email/phone extraction
   from HTML/JSON) and per-platform rate limiting are next.
 - **Audit log:** results are printed, not yet written to a tamper-evident

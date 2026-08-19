@@ -15,6 +15,7 @@ const (
 	FeatureRecoveryProbing     = "recovery-probing"     // item 7
 	FeaturePeopleSearch        = "people-search"        // item 8
 	FeatureAuthenticatedScrape = "authenticated-scrape" // item 9
+	FeatureRecoveryReveal      = "recovery-reveal"      // item 10 (masked-detail reveal)
 )
 
 // AllFeatures lists every registered live feature, in canonical order.
@@ -23,6 +24,7 @@ var AllFeatures = []string{
 	FeatureRecoveryProbing,
 	FeaturePeopleSearch,
 	FeatureAuthenticatedScrape,
+	FeatureRecoveryReveal,
 }
 
 // Exception documents the policy exception that allows one live feature.
@@ -67,6 +69,13 @@ var Exceptions = map[string]Exception{
 		Summary:    "Harvesting of contacts, emails and phone numbers from platforms using a user-supplied session credential.",
 		Flag:       "--live authenticated-scrape",
 		Conditions: "user-supplied credential held only in memory or an env var (never argv, never the audit log); read-only API/page access, no posts or profile edits; per-platform rate limit (default 1 req/5s); harvested PII written to a redacted report by default; session discarded at run end.",
+	},
+	FeatureRecoveryReveal: {
+		Feature:    FeatureRecoveryReveal,
+		Name:       "Account-recovery / masked-identity reveal",
+		Summary:    "Reveals masked email/phone digits from account-recovery or profile pages (holehe-style).",
+		Flag:       "--live recovery-reveal",
+		Conditions: "explicit target + identifier list; at most one state-changing request per identifier (one reveal); global cap 10 identifiers per run; subject consent flag required; revealed PII written to a redacted report by default; no credential submission.",
 	},
 }
 
