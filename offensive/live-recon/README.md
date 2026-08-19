@@ -8,8 +8,9 @@ features from the safety model, each with a mock (offline) and a real
 |---------|------|--------------|
 | `active-scanning` | `-feature active-scanning` | TCP connect + read-only HTTP GET against `host:port` targets |
 | `recovery-probing` | `-feature recovery-probing` | Password-reset / account-existence differential against a URL template |
-| `people-search` | `-feature people-search` | Read-only GET against a source whitelist (requires `-consent`) |
+| `people-search` | `-feature people-search` | Read-only GET against a source whitelist (requires `-consent`); whitelist loaded from the osint taxonomy |
 | `authenticated-scrape` | `-feature authenticated-scrape` | Authenticated read-only GET (Bearer token from env/`-credential`) |
+| `recovery-reveal` | `-feature recovery-reveal` | Masked email/phone reveal from account-recovery pages (requires `-consent`) |
 
 ## Safety model
 

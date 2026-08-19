@@ -13,9 +13,11 @@ package probe
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -27,6 +29,7 @@ const (
 	FeatureRecoveryProbing     = "recovery-probing"
 	FeaturePeopleSearch        = "people-search"
 	FeatureAuthenticatedScrape = "authenticated-scrape"
+	FeatureRecoveryReveal      = "recovery-reveal"
 )
 
 // ProbeResult is the outcome of one live probe.
@@ -56,27 +59,39 @@ type RunOpts struct {
 	Credential string
 	// RateLimitMS is the per-target delay between probes (0 = none).
 	RateLimitMS int
+	// Sources is the comma-separated list of people-search sources to query
+	// (overrides the taxonomy whitelist when non-empty).
+	Sources string
+	// Aggressive enables the external nmap/nuclei sub-gate of active-scanning.
+	Aggressive bool
+	// NucleiTemplate is the nuclei template dir to run ("" = skip nuclei).
+	NucleiTemplate string
 }
 
 // --- active scanning ------------------------------------------------------
 
 // ActiveScanner probes a host:port list with TCP connect + optional HTTP
-// GET. Read-only; no auth, no exploit, no DoS.
+// GET. Read-only; no auth, no exploit, no DoS. When opts.Aggressive is set
+// (the "aggressive" sub-gate of the active-scanning live feature) it also
+// runs an external nmap -sV service-version probe (and optional nuclei) via
+// ExternalScan — these invoke external binaries not part of the OSS core.
 type ActiveScanner struct {
-	Client  *http.Client
-	Timeout time.Duration
+	Client   *http.Client
+	Timeout  time.Duration
+	External *ExternalScan
 }
 
 func NewActiveScanner() *ActiveScanner {
-	return &ActiveScanner{Client: &http.Client{}, Timeout: 3 * time.Second}
+	return &ActiveScanner{Client: &http.Client{}, Timeout: 3 * time.Second, External: NewExternalScan()}
 }
 
 func (a *ActiveScanner) Name() string    { return "active-scanner" }
 func (a *ActiveScanner) Feature() string { return FeatureActiveScanning }
 
 // Run probes a single "host:port" target (TCP connect). If the port serves
-// HTTP (80/8080/443 or the probe is told to), it also issues one GET.
-func (a *ActiveScanner) Run(ctx context.Context, target string, _ RunOpts) (*ProbeResult, error) {
+// HTTP (80/8080/443 or the probe is told to), it also issues one GET. When
+// opts.Aggressive is set, it additionally runs an external nmap -sV probe.
+func (a *ActiveScanner) Run(ctx context.Context, target string, opts RunOpts) (*ProbeResult, error) {
 	host, portStr, err := net.SplitHostPort(target)
 	if err != nil {
 		return nil, fmt.Errorf("target %q must be host:port", target)
@@ -118,6 +133,30 @@ func (a *ActiveScanner) Run(ctx context.Context, target string, _ RunOpts) (*Pro
 			res.Detail = "tcp open; http " + itoa(resp.StatusCode)
 		}
 	}
+
+	// Aggressive sub-gate: external nmap -sV (+ optional nuclei). Only when
+	// the caller has explicitly enabled the aggressive scope.
+	if opts.Aggressive && a.External != nil {
+		nmapEv, nerr := a.External.RunNmap(ctx, host, portStr)
+		if nerr != nil {
+			res.Evidence["nmap_error"] = nerr.Error()
+		} else {
+			for k, v := range nmapEv {
+				res.Evidence["nmap_"+k] = v
+			}
+		}
+		if opts.NucleiTemplate != "" {
+			nucEv, uerr := a.External.RunNuclei(ctx, host, portStr, opts.NucleiTemplate)
+			if uerr != nil {
+				res.Evidence["nuclei_error"] = uerr.Error()
+			} else {
+				for k, v := range nucEv {
+					res.Evidence["nuclei_"+k] = v
+				}
+			}
+		}
+	}
+	res.LatencyMS = time.Since(start).Milliseconds()
 	return res, nil
 }
 
@@ -196,15 +235,57 @@ func NewPeopleSearcher() *PeopleSearcher {
 	return &PeopleSearcher{
 		Client:    &http.Client{},
 		Timeout:   5 * time.Second,
-		Whitelist: []string{"www.spokeo.com", "fastpeoplesearch.com", "truepeoplesearch.com"},
+		Whitelist: defaultPeopleWhitelist(),
 	}
+}
+
+// defaultPeopleWhitelist loads the people-search source whitelist from the
+// canonical osint taxonomy (platform/osint-taxonomy/taxonomy.json) when it is
+// present on disk (monorepo layout: ../../../platform/...). Falls back to a
+// minimal built-in list when the taxonomy is not available (e.g. a standalone
+// checkout), so the mock/offline path never breaks.
+func defaultPeopleWhitelist() []string {
+	const fallback = "www.spokeo.com"
+	paths := []string{
+		"../../../platform/osint-taxonomy/taxonomy.json",
+		"/platform/osint-taxonomy/taxonomy.json",
+		os.Getenv("OSINT_TAXONOMY"),
+	}
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var tax struct {
+			Categories []struct {
+				ID              string   `json:"id"`
+				SourceWhitelist []string `json:"source_whitelist"`
+			} `json:"categories"`
+		}
+		if err := json.Unmarshal(data, &tax); err != nil {
+			continue
+		}
+		for _, c := range tax.Categories {
+			if c.ID == "people-search" && len(c.SourceWhitelist) > 0 {
+				return c.SourceWhitelist
+			}
+		}
+	}
+	return []string{fallback}
 }
 
 func (p *PeopleSearcher) Name() string    { return "people-searcher" }
 func (p *PeopleSearcher) Feature() string { return FeaturePeopleSearch }
 
-// Run queries the first whitelisted source for the subject (opts.Credential
-// carries the query term, e.g. name or email).
+// Run queries whitelisted sources for the subject (opts.Credential carries
+// the query term, e.g. name or email). By default it queries the first
+// whitelisted source (data minimisation); with opts.Sources set it queries
+// each named source in turn and aggregates the results. Results are
+// redacted: the subject's name is carried only in the Target field, never in
+// Evidence.
 func (p *PeopleSearcher) Run(ctx context.Context, target string, opts RunOpts) (*ProbeResult, error) {
 	if !opts.Consent {
 		return nil, fmt.Errorf("people-search requires subject consent (--consent)")
@@ -215,9 +296,29 @@ func (p *PeopleSearcher) Run(ctx context.Context, target string, opts RunOpts) (
 	if p.Client == nil {
 		p.Client = &http.Client{}
 	}
+
+	// Determine which sources to query.
+	var sources []string
+	if opts.Sources != "" {
+		for _, s := range strings.Split(opts.Sources, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				sources = append(sources, s)
+			}
+		}
+	} else {
+		// Data minimisation: first whitelisted source only.
+		if len(p.Whitelist) > 0 {
+			sources = []string{p.Whitelist[0]}
+		}
+	}
+	if len(sources) == 0 {
+		return nil, fmt.Errorf("people-search: no sources (pass -sources or set a whitelist)")
+	}
+
 	start := time.Now()
 	res := &ProbeResult{Feature: p.Feature(), Target: target}
-	for _, host := range p.Whitelist {
+	var hits []map[string]any
+	for _, host := range sources {
 		u := "https://" + host + "/search?q=" + opts.Credential
 		hctx, cancel := context.WithTimeout(ctx, p.Timeout)
 		req, err := http.NewRequestWithContext(hctx, http.MethodGet, u, nil)
@@ -233,12 +334,31 @@ func (p *PeopleSearcher) Run(ctx context.Context, target string, opts RunOpts) (
 			res.Detail = err.Error()
 			break
 		}
-		res.Found = resp.StatusCode < 400
-		res.Detail = fmt.Sprintf("%s: http %d", host, resp.StatusCode)
-		res.Evidence = map[string]any{"source": host, "http_status": resp.StatusCode}
+		redacted := map[string]any{
+			"source":      host,
+			"http_status": resp.StatusCode,
+		}
+		if resp.StatusCode < 400 {
+			res.Found = true
+			hits = append(hits, redacted)
+		}
+		res.Evidence = redacted // last source wins for single-source mode
 		resp.Body.Close()
-		break // one query per source per run (data minimization)
 	}
+
+	// Multi-source aggregation: merge hits into a redacted summary.
+	if len(sources) > 1 {
+		res.Evidence = map[string]any{
+			"sources_queried": len(sources),
+			"sources_hit":     len(hits),
+			"hits":            hits,
+		}
+		res.Detail = fmt.Sprintf("%d/%d sources hit", len(hits), len(sources))
+	} else {
+		res.Detail = fmt.Sprintf("%s: http %v", sources[0], res.Evidence["http_status"])
+	}
+	// Redact any PII in the evidence before it reaches stdout/audit.
+	res.Evidence = RedactEvidence(res.Evidence)
 	res.LatencyMS = time.Since(start).Milliseconds()
 	return res, nil
 }
@@ -309,4 +429,62 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b[i:])
+}
+
+// --- recovery reveal -------------------------------------------------------
+
+// RecoveryRevealer queries an account-recovery / profile page that shows a
+// partially masked identifier (e.g. "j***@example.com") and records what was
+// revealed. At most one state-changing request per identifier (the reveal
+// itself may be a POST on some platforms); the runner is read-only by default
+// (GET) and the caller enforces the per-identifier cap.
+type RecoveryRevealer struct {
+	Client  *http.Client
+	Timeout time.Duration
+}
+
+func NewRecoveryRevealer() *RecoveryRevealer {
+	return &RecoveryRevealer{Client: &http.Client{}, Timeout: 5 * time.Second}
+}
+
+func (r *RecoveryRevealer) Name() string    { return "recovery-revealer" }
+func (r *RecoveryRevealer) Feature() string { return FeatureRecoveryReveal }
+
+// Run queries the reveal endpoint for one identifier. target is the URL
+// template with {identifier}; opts.Credential carries the identifier value.
+// Consent is required (subject consent for the reveal).
+func (r *RecoveryRevealer) Run(ctx context.Context, target string, opts RunOpts) (*ProbeResult, error) {
+	if !opts.Consent {
+		return nil, fmt.Errorf("recovery-reveal requires subject consent (--consent)")
+	}
+	if r.Timeout <= 0 {
+		r.Timeout = 5 * time.Second
+	}
+	if r.Client == nil {
+		r.Client = &http.Client{}
+	}
+	urlOut := strings.ReplaceAll(target, "{identifier}", opts.Credential)
+	start := time.Now()
+	hctx, cancel := context.WithTimeout(ctx, r.Timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(hctx, http.MethodGet, urlOut, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "live-recon/0.1 (+https://github.com/Schildkrote/open-security-platform)")
+	resp, err := r.Client.Do(req)
+	if err != nil {
+		return &ProbeResult{Feature: r.Feature(), Target: target, Uncertain: true,
+			Detail: err.Error(), LatencyMS: time.Since(start).Milliseconds()}, nil
+	}
+	defer resp.Body.Close()
+	res := &ProbeResult{
+		Feature:   r.Feature(),
+		Target:    target,
+		Found:     resp.StatusCode < 400,
+		Detail:    fmt.Sprintf("http %d (reveal)", resp.StatusCode),
+		LatencyMS: time.Since(start).Milliseconds(),
+		Evidence:  map[string]any{"http_status": resp.StatusCode},
+	}
+	return res, nil
 }

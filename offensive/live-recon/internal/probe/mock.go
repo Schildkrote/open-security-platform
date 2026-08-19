@@ -102,6 +102,31 @@ func (m *MockAuthScraper) Run(_ context.Context, target string, opts RunOpts) (*
 	return res, nil
 }
 
+// MockRecoveryRevealer simulates a masked-identity reveal: "found" (a masked
+// identifier is shown) when the mock hash of the identifier is in the top
+// third. Requires consent, like the real runner.
+type MockRecoveryRevealer struct{}
+
+func NewMockRecoveryRevealer() *MockRecoveryRevealer { return &MockRecoveryRevealer{} }
+func (m *MockRecoveryRevealer) Name() string         { return "mock-recovery-revealer" }
+func (m *MockRecoveryRevealer) Feature() string      { return FeatureRecoveryReveal }
+
+func (m *MockRecoveryRevealer) Run(_ context.Context, target string, opts RunOpts) (*ProbeResult, error) {
+	if !opts.Consent {
+		return nil, fmt.Errorf("recovery-reveal requires subject consent (--consent)")
+	}
+	ident := opts.Credential
+	found := mockHash("reveal:"+ident) > 2/3
+	res := &ProbeResult{Feature: m.Feature(), Target: target, Found: found}
+	if found {
+		res.Detail = "masked identifier revealed (mock)"
+		res.Evidence = map[string]any{"source": "mock", "revealed": "j***@example.com"}
+	} else {
+		res.Detail = "no masked identifier shown (mock)"
+	}
+	return res, nil
+}
+
 // Runners returns a feature→Runner map for the mock set, for CLI use.
 func MockRunners() map[string]Runner {
 	return map[string]Runner{
@@ -109,6 +134,7 @@ func MockRunners() map[string]Runner {
 		FeatureRecoveryProbing:     NewMockRecoveryProber(),
 		FeaturePeopleSearch:        NewMockPeopleSearcher(),
 		FeatureAuthenticatedScrape: NewMockAuthScraper(),
+		FeatureRecoveryReveal:      NewMockRecoveryRevealer(),
 	}
 }
 
@@ -119,16 +145,18 @@ func RealRunners() map[string]Runner {
 		FeatureRecoveryProbing:     NewRecoveryProber(),
 		FeaturePeopleSearch:        NewPeopleSearcher(),
 		FeatureAuthenticatedScrape: NewAuthScraper(),
+		FeatureRecoveryReveal:      NewRecoveryRevealer(),
 	}
 }
 
-// AllFeatures lists the four live features in canonical order.
+// AllFeatures lists the five live features in canonical order.
 func AllFeatures() []string {
 	return []string{
 		FeatureActiveScanning,
 		FeatureRecoveryProbing,
 		FeaturePeopleSearch,
 		FeatureAuthenticatedScrape,
+		FeatureRecoveryReveal,
 	}
 }
 

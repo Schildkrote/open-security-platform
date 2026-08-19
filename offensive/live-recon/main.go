@@ -23,12 +23,15 @@ import (
 )
 
 func main() {
-	feature := flag.String("feature", "", "feature: active-scanning | recovery-probing | people-search | authenticated-scrape")
+	feature := flag.String("feature", "", "feature: active-scanning | recovery-probing | people-search | authenticated-scrape | recovery-reveal")
 	target := flag.String("target", "", "target (host:port for active-scanning; URL template for the rest)")
 	live := flag.String("live", "", "comma-separated live features to enable (default: none = mock-only)")
 	real := flag.Bool("real", false, "use the real (network) runner for the enabled feature")
 	credential := flag.String("credential", "", "identifier/credential (env LIVE_RECON_CREDENTIAL also read)")
-	consent := flag.Bool("consent", false, "subject consent (required for people-search)")
+	consent := flag.Bool("consent", false, "subject consent (required for people-search and recovery-reveal)")
+	sources := flag.String("sources", "", "comma-separated people-search sources to query (default: first whitelisted source)")
+	aggressive := flag.Bool("aggressive", false, "enable the nmap/nuclei sub-gate of active-scanning (requires external binaries)")
+	nuclei := flag.String("nuclei", "", "nuclei template dir to run with -aggressive (default: skip)")
 	format := flag.String("format", "text", "output: text | json")
 	flag.Parse()
 
@@ -68,8 +71,11 @@ func main() {
 	defer cancel()
 
 	res, err := runner.Run(ctx, *target, probe.RunOpts{
-		Consent:    *consent,
-		Credential: *credential,
+		Consent:        *consent,
+		Credential:     *credential,
+		Sources:        *sources,
+		Aggressive:     *aggressive,
+		NucleiTemplate: *nuclei,
 	})
 	if err != nil {
 		log.Fatalf("run: %v", err)
