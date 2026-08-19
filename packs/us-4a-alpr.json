@@ -1,0 +1,40 @@
+{
+  "id": "us-4a-alpr",
+  "name": "US Fourth Amendment — ALPR location databases",
+  "version": "1.0.0",
+  "description": "Jurisdiction pack inspired by public US case-law signals (e.g. Norfolk VA 2024 treating long-term ALPR location collection as a search). Not legal advice.",
+  "meta": {
+    "signal": "United States v. Jones analogy; Norfolk Circuit Court 2024 ALPR warrant ruling",
+    "live_hotlist": "Patrol hotlist match on a single live read is lower friction than bulk historical query",
+    "disclaimer": "Agencies must apply their own counsel and state statutes"
+  },
+  "rules": [
+    {
+      "id": "historical-pattern-warrant",
+      "purposes": ["pattern_of_life"],
+      "object_types": ["PlateRead", "Vehicle"],
+      "actions": ["query_historical", "read"],
+      "require_warrant": true,
+      "on_fail_outcome": "require_warrant",
+      "on_fail_reason": "Historical ALPR / pattern-of-life queries require warrant context under us-4a-alpr pack",
+      "allow_if_ok": true
+    },
+    {
+      "id": "investigation-restricted-case",
+      "purposes": ["investigation"],
+      "classifications": ["restricted", "secret"],
+      "require_case": true,
+      "on_fail_outcome": "require_case",
+      "on_fail_reason": "Restricted investigative ALPR-linked data requires an open case id",
+      "allow_if_ok": true
+    },
+    {
+      "id": "no-civilian-mass-alpr",
+      "purposes": ["research", "client_protection"],
+      "object_types": ["PlateRead"],
+      "actions": ["query_historical"],
+      "force_deny": true,
+      "deny_reason": "Bulk historical ALPR is not available outside LE investigation purposes in this pack"
+    }
+  ]
+}

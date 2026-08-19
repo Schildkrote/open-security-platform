@@ -1,0 +1,17 @@
+{
+  "hotlist": [
+    {"plate": "ABC123", "reason": "stolen", "source": "NCIC-mock", "case_id": "case1", "priority": 1}
+  ],
+  "plates": [
+    {"event_id": "e1", "plate": "ABC123", "camera_id": "cam-north", "location_id": "gate-n", "color": "black", "confidence": 0.94},
+    {"event_id": "e2", "plate": "ZZZ999", "camera_id": "cam-south", "location_id": "gate-s", "color": "white", "confidence": 0.91},
+    {"event_id": "e3", "plate": "ABC123", "camera_id": "cam-east", "location_id": "lot-a", "make": "Toyota", "confidence": 0.89, "attrs": {"bumper_sticker": "yes"}}
+  ],
+  "osp": [
+    {"id": "u1", "kind": "username_hit", "subject": "alice", "summary": "username alice on github", "severity": "low", "source": "offensive/username-enum"},
+    {"id": "b1", "kind": "breach", "subject": "alice", "summary": "email in mock breach", "severity": "medium", "source": "offensive/credential-intel"}
+  ],
+  "obp": [
+    {"id": "m1", "client_pseudo": "2bd806c97f0e", "probe_id": "web-77", "score": 0.91, "source": "targeted_search", "retention_days": 30}
+  ]
+}
