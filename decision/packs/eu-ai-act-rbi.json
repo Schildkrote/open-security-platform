@@ -1,0 +1,30 @@
+{
+  "id": "eu-ai-act-rbi",
+  "name": "EU AI Act — remote biometric identification (high-level)",
+  "version": "1.0.0",
+  "description": "Conservative defaults for real-time / post remote biometric identification. Pack encodes product policy, not a full statutory engine.",
+  "meta": {
+    "note": "Real-time RBI in publicly accessible spaces is heavily restricted; post-remote also conditioned",
+    "product_stance": "Untargeted mass ID remains prohibited at OBP lawful-basis layer; this pack reinforces ODP reads"
+  },
+  "rules": [
+    {
+      "id": "realtime-public-deny-without-statutory",
+      "purposes": ["patrol_alert", "pattern_of_life"],
+      "object_types": ["BiometricHit"],
+      "force_deny": true,
+      "deny_reason": "Real-time / patrol biometric identification in public-like contexts denied without dedicated statutory pack override"
+    },
+    {
+      "id": "post-remote-investigation",
+      "purposes": ["investigation"],
+      "object_types": ["BiometricHit"],
+      "roles": ["officer", "analyst", "admin"],
+      "require_case": true,
+      "require_warrant": false,
+      "on_fail_outcome": "require_case",
+      "on_fail_reason": "Post-remote biometric ID requires documented case / authorization record",
+      "allow_if_ok": true
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "id": "gdpr-biometric",
+  "name": "GDPR / EU — biometric special category",
+  "version": "1.0.0",
+  "description": "Overlays for biometric objects (OBP hits) under GDPR Art. 9 and EU AI Act high-risk framing. Not legal advice.",
+  "meta": {
+    "art9": "Biometric data for unique identification is special category",
+    "ai_act": "Remote biometric identification systems face strict limits; law-enforcement RBI is heavily conditioned",
+    "primary_basis": "Explicit consent for client_protection enrolment/search; LE only with statutory basis"
+  },
+  "rules": [
+    {
+      "id": "biometric-research-deny",
+      "purposes": ["research"],
+      "object_types": ["BiometricHit", "Person"],
+      "force_deny": true,
+      "deny_reason": "Open research purpose is not a lawful basis for special-category biometric hits"
+    },
+    {
+      "id": "client-protection-allow",
+      "purposes": ["client_protection"],
+      "object_types": ["BiometricHit", "Person"],
+      "roles": ["client_app", "analyst", "admin", "agent"],
+      "allow_if_ok": true
+    },
+    {
+      "id": "le-biometric-needs-case",
+      "purposes": ["investigation", "pattern_of_life"],
+      "object_types": ["BiometricHit"],
+      "roles": ["officer", "analyst"],
+      "require_case": true,
+      "on_fail_outcome": "require_case",
+      "on_fail_reason": "LE access to biometric hits requires case context under gdpr-biometric pack",
+      "allow_if_ok": true
+    },
+    {
+      "id": "patrol-no-biometric-bulk",
+      "purposes": ["patrol_alert"],
+      "object_types": ["BiometricHit"],
+      "force_deny": true,
+      "deny_reason": "Live patrol_alert purpose is for vehicle hotlists, not biometric identification"
+    }
+  ]
+}
