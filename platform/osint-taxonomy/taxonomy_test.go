@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// goldenHash pins the taxonomy file so drift is caught in CI. 
+// goldenHash pins the taxonomy file so drift is caught in CI.
 // If you change taxonomy.json, run
 // `go test -run TestGoldenHash -update` to re-pin.
 var goldenHash = "ed4fcc8072e30dd5bc9146274aac91a1dcecdeed3c843b045fa5d3306f9d244b"
