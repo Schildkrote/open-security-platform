@@ -1,5 +1,13 @@
 # open-security-platform
 
+[![CI](https://github.com/Schildkrote/open-security-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Schildkrote/open-security-platform/actions/workflows/ci.yml)
+[![Lint](https://github.com/Schildkrote/open-security-platform/actions/workflows/lint.yml/badge.svg)](https://github.com/Schildkrote/open-security-platform/actions/workflows/lint.yml)
+[![Docs](https://github.com/Schildkrote/open-security-platform/actions/workflows/docs.yml/badge.svg)](https://schildkrote.github.io/open-security-platform/)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/License-AGPL--3.0--only-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.25%2F1.26-00ADD8?logo=go&logoColor=white)](go.work)
+[![Node](https://img.shields.io/badge/Node-%E2%89%A522.6-339933?logo=nodedotjs&logoColor=white)](package.json)
+[![Python](https://img.shields.io/badge/Python-%E2%89%A53.11-3776AB?logo=python&logoColor=white)](ruff.toml)
+
 > An open-source security platform: a monorepo of self-hostable, developer-friendly
 > security products spanning identity, AI security, AI governance, offensive
 > security, and security operations.
@@ -42,6 +50,23 @@ actions can be brokered through `open-pam-jit` and run inside `agent-sandbox`.
   end-to-end flow plus a **native webhook spine** where components emit/consume
   `IntegrationEvent`s directly, with a subscription/registry broker. Run it with
   `make integration`.
+
+## What each component replaces
+
+Honest vendor comparisons live on the [docs site](https://schildkrote.github.io/open-security-platform/comparison/).
+Every component is a self-contained **v0.1-scaffold MVP** (mock/in-memory
+backends) — see the [comparison overview](docs/comparison.md) for the maturity
+legend. Only the integration-spine subset (`ai-redteam-platform` →
+`pentest-manager` → `ai-compliance-hub` + `open-pam-jit`/`agent-sandbox`, and
+`oiaf` as spine producer) is proven end-to-end today.
+
+| Portfolio | Component(s) | Category it targets | Full comparison |
+|---|---|---|---|
+| identity/ | `open-pam-jit`, `agent-identity` | PAM/JIT access (Teleport, CyberArk, Britive), agent identity (Astrix, Aembit, SPIFFE) | [comparison-identity.md](docs/comparison-identity.md) |
+| ai-security/ | `open-ai-gateway`, `mcp-security-gateway`, `rag-authorization`, `agent-sandbox`, `ai-access-broker` | LLM gateways (LiteLLM, Portkey, Kong), MCP security (Lasso, Invariant Labs), RAG authz (Oso, OpenFGA), agent sandboxes (E2B, Daytona), AI access (Zscaler AI, Netskope) | [comparison-ai-security.md](docs/comparison-ai-security.md) |
+| ai-governance/ | `ai-compliance-hub`, `ai-redteam-evals`, `ai-redteam-platform` | AI compliance (Vanta, Drata, Credo AI), AI red teaming (Garak, promptfoo, PyRIT, HiddenLayer) | [comparison-ai-governance.md](docs/comparison-ai-governance.md) |
+| offensive/ | `pentest-manager`, `purple-team`, `attack-path`, `live-recon`, `username-enum`, `credential-intel`, `agent-redteam-range` | Pentest mgmt (DefectDojo, PlexTrac), BAS/purple team (CALDERA, AttackIQ), attack paths (BloodHound, XM Cyber), OSINT (Sherlock, SpiderFoot, HIBP), vulnerable AI ranges (Gandalf, DVWA-analog) | [comparison-offensive.md](docs/comparison-offensive.md) |
+| soc/ | `open-soar` | SOAR/IR automation (XSOAR, Tines, Shuffle, TheHive) | [comparison-soc.md](docs/comparison-soc.md) |
 
 ## Portfolios
 

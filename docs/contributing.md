@@ -1,6 +1,6 @@
 # Contributing
 
-See the repository [CONTRIBUTING.md](https://github.com/open-security-platform/open-security-platform/blob/main/CONTRIBUTING.md)
+See the repository [CONTRIBUTING.md](https://github.com/Schildkrote/open-security-platform/blob/main/CONTRIBUTING.md)
 for full details.
 
 ## Quick summary
@@ -14,4 +14,4 @@ for full details.
 - All contributions are licensed under AGPL-3.0-only.
 
 Please read the
-[Code of Conduct](https://github.com/open-security-platform/open-security-platform/blob/main/CODE_OF_CONDUCT.md).
+[Code of Conduct](https://github.com/Schildkrote/open-security-platform/blob/main/CODE_OF_CONDUCT.md).
