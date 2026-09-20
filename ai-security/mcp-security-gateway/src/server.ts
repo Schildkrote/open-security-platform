@@ -5,7 +5,8 @@ import { PolicyEngine } from "./policy.ts";
 import * as registry from "./registry.ts";
 import { setSecret } from "./secrets.ts";
 import * as audit from "./audit.ts";
-import { HttpTransport, makeExecutor } from "./transport.ts";
+import { CompositeTransport, HttpTransport, makeExecutor } from "./transport.ts";
+import { StdioTransport } from "./stdio.ts";
 import type { JsonRpcRequest } from "./jsonrpc.ts";
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -71,13 +72,27 @@ if (isMain) {
     allowedDomains: (process.env.ALLOWED_DOMAINS ?? "").split(",").filter(Boolean),
     requireAuth: process.env.REQUIRE_AUTH === "1",
   };
-  // Phase 3: real MCP transport. MCP_TRANSPORT=http forwards tools/call to each
-  // server's registered endpoint; unset = the offline mock executor.
-  if (process.env.MCP_TRANSPORT === "http") {
-    options.executor = makeExecutor(
-      new HttpTransport(),
-      (tool) => registry.getServer(db, tool.server_id)?.endpoint ?? null,
-    );
+  // Phase 3: real MCP transports. MCP_TRANSPORT selects the executor:
+  //   http  — all servers with an endpoint are called over Streamable-HTTP/SSE
+  //   stdio — all servers with a `stdio:<command> [args...]` endpoint are
+  //           proxied over newline-delimited JSON-RPC on a child process
+  //   auto  — per-upstream-server choice by endpoint scheme (CompositeTransport):
+  //           `stdio:` prefix → stdio child, http(s) URL → Streamable-HTTP, so
+  //           one gateway can front both kinds at once
+  //   unset — the offline mock executor (default; keeps tests hermetic)
+  // Either way the transport sits behind the SAME registry/allowlist/policy/
+  // poisoning/audit pipeline in Gateway.toolsCall — it only runs after a call
+  // is approved, never instead of the checks.
+  const transportMode = process.env.MCP_TRANSPORT ?? "";
+  const endpointFor = (tool: registry.McpTool) => registry.getServer(db, tool.server_id)?.endpoint ?? null;
+  if (transportMode === "http") {
+    options.executor = makeExecutor(new HttpTransport(), endpointFor);
+  } else if (transportMode === "stdio") {
+    options.executor = makeExecutor(new StdioTransport(), endpointFor);
+  } else if (transportMode === "auto") {
+    const composite = new CompositeTransport();
+    options.executor = makeExecutor(composite, endpointFor);
+    process.on("exit", () => composite.close()); // reap stdio children on shutdown
   }
   const gateway = new Gateway(db, defaultPolicy, options);
   const port = Number(process.env.PORT ?? 8084);

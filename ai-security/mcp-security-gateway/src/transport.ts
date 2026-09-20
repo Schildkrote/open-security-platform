@@ -1,9 +1,15 @@
 import type { ToolExecutor } from "./gateway.ts";
 import type { McpTool } from "./registry.ts";
+import { StdioTransport } from "./stdio.ts";
 
 // Real MCP transports (Phase 3). HttpTransport implements MCP Streamable-HTTP
-// (JSON-RPC over HTTP, with SSE response support); MockTransport is the offline
-// default. A stdio transport for local servers is a documented follow-up.
+// (JSON-RPC over HTTP, with SSE response support); StdioTransport proxies a
+// local child MCP server over newline-delimited JSON-RPC on stdin/stdout;
+// MockTransport is the offline default. CompositeTransport picks between the
+// real transports per upstream server by its registered endpoint scheme
+// (`stdio:` vs http(s) URL), so one gateway can front both kinds at once.
+// Every transport sits *behind* the gateway's registry/allowlist/policy/
+// poisoning/audit pipeline — it only runs after a call is approved.
 
 export interface Transport {
   callTool(endpoint: string, toolName: string, args: unknown): Promise<unknown>;
@@ -48,6 +54,34 @@ export class HttpTransport implements Transport {
 export class MockTransport implements Transport {
   async callTool(_endpoint: string, toolName: string, args: unknown): Promise<unknown> {
     return { content: [{ type: "text", text: `executed ${toolName} with ${JSON.stringify(args)}` }] };
+  }
+}
+
+// CompositeTransport routes each call by the endpoint's scheme: `stdio:` (or a
+// bare command, i.e. anything parseable as a stdio spec) goes to StdioTransport,
+// everything else is treated as an HTTP(S) Streamable-HTTP endpoint. This is the
+// per-upstream-server transport switch the gateway config uses.
+export class CompositeTransport implements Transport {
+  private http: Transport;
+  private stdio: Transport & { closeAll(): void };
+
+  // Explicit fields, not parameter properties (--experimental-strip-types).
+  constructor(http: Transport = new HttpTransport(), stdio?: StdioTransport) {
+    this.http = http;
+    this.stdio = stdio ?? new StdioTransport();
+  }
+
+  static isStdioEndpoint(endpoint: string): boolean {
+    return endpoint.trim().startsWith("stdio:");
+  }
+
+  async callTool(endpoint: string, toolName: string, args: unknown): Promise<unknown> {
+    const t = CompositeTransport.isStdioEndpoint(endpoint) ? this.stdio : this.http;
+    return t.callTool(endpoint, toolName, args);
+  }
+
+  close(): void {
+    this.stdio.closeAll();
   }
 }
 
