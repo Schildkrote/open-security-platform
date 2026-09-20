@@ -1,7 +1,7 @@
 // Command attack-path analyzes attack paths in a scenario graph.
 //
 // Copyright 2026 open-security-platform Authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 package main
 
 import (

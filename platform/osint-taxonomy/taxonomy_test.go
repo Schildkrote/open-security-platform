@@ -1,5 +1,5 @@
 // Copyright 2026 open-security-platform Authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 package osinttaxonomy
 
@@ -12,10 +12,10 @@ import (
 	"testing"
 )
 
-// goldenHash pins the taxonomy file so drift is caught in CI (same pattern as
-// platform/lawful-basis). If you change taxonomy.json, run
+// goldenHash pins the taxonomy file so drift is caught in CI. 
+// If you change taxonomy.json, run
 // `go test -run TestGoldenHash -update` to re-pin.
-var goldenHash = "47ed0e08ea2096a55f14e092fdcbddb309a0485de11efd8aee4e6c4e7ec1a0fd"
+var goldenHash = "ed4fcc8072e30dd5bc9146274aac91a1dcecdeed3c843b045fa5d3306f9d244b"
 
 func TestGoldenHash(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("taxonomy.json"))
@@ -44,7 +44,7 @@ func TestLoad(t *testing.T) {
 
 func TestByIDs(t *testing.T) {
 	tax, _ := Load()
-	for _, id := range []string{"breach-credential", "username-enum", "people-search", "social-scoring", "biometric-scrape"} {
+	for _, id := range []string{"breach-credential", "username-enum", "people-search", "active-scanning", "auth-scrape"} {
 		if _, err := tax.ByID(id); err != nil {
 			t.Errorf("ByID(%q): %v", id, err)
 		}
@@ -74,18 +74,6 @@ func TestSourceWhitelistFor(t *testing.T) {
 	}
 	if len(wl) < 5 {
 		t.Errorf("people-search whitelist too short: %v", wl)
-	}
-}
-
-func TestBasisFor(t *testing.T) {
-	tax, _ := Load()
-	b, _ := tax.BasisFor("biometric-scrape")
-	if b != "prohibited" {
-		t.Errorf("BasisFor(biometric-scrape) = %q, want prohibited", b)
-	}
-	b, _ = tax.BasisFor("biometric-categorise")
-	if b != "requires_dpia" {
-		t.Errorf("BasisFor(biometric-categorise) = %q, want requires_dpia", b)
 	}
 }
 

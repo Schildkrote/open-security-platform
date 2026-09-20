@@ -11,7 +11,7 @@ for full details.
 - Keep components runnable offline with minimal dependencies.
 - Offensive/AI components must preserve the safety model (authorized scope only,
   no destructive payloads, no real exfiltration, full audit).
-- All contributions are licensed under Apache-2.0.
+- All contributions are licensed under AGPL-3.0-only.
 
 Please read the
 [Code of Conduct](https://github.com/open-security-platform/open-security-platform/blob/main/CODE_OF_CONDUCT.md).

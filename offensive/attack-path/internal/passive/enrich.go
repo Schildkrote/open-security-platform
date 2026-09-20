@@ -1,5 +1,5 @@
 // Copyright 2026 open-security-platform Authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Package passive adds a -domain flag to the attack-path CLI: it resolves a
 // domain to a passive Report (offline static table by default) and appends

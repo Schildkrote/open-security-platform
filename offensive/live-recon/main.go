@@ -1,5 +1,5 @@
 // Copyright 2026 open-security-platform Authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Command live-recon runs the four live-gated recon features (active
 // scanning, recovery probing, people search, authenticated scraping). It

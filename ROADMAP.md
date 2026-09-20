@@ -5,12 +5,6 @@ has its own detailed `NEXT_STEPS.md`.
 
 ## Done
 
-- **Biometric + Decision platforms (subtrees):** `biometric/` (open-biometric-platform:
-  lawful-basis matrix, audit-on-hot-path, centroid match, ODP exporter) and
-  `decision/` (open-decision-platform: ontology + SQLite, jurisdiction packs on
-  ALPR/actions/webhook hot paths, OBP biometric bridge) added as synced
-  subtrees with their modules in the fan-out Makefile; `make verify` green.
-  Live OBP→ODP bridge proven: exporter POSTs → pack-gated webhook → SQLite.
 - **Monorepo + tooling:** 16 components consolidated with a fan-out `Makefile`,
   `go.work`, npm workspaces, per-language CI matrix, mkdocs docs, governance docs.
 - **Platform backbone (Phase 1):** shared `platform/audit` (hash-chained audit),

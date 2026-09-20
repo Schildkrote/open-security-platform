@@ -13,7 +13,9 @@
           "path": "offensive/credential-intel",
           "mode": "real",
           "live": true,
-          "live_features": ["hibp"],
+          "live_features": [
+            "hibp"
+          ],
           "notes": "HIBP k-anonymity: only first 5 hex chars of SHA-1 leave the machine."
         }
       ]
@@ -29,7 +31,9 @@
           "path": "offensive/username-enum",
           "mode": "real",
           "live": true,
-          "live_features": ["http"],
+          "live_features": [
+            "http"
+          ],
           "notes": "Differential 200/4xx detection; read-only GETs; uncertain reported, never guessed."
         }
       ]
@@ -45,7 +49,9 @@
           "path": "offensive/live-recon",
           "mode": "real",
           "live": true,
-          "live_features": ["recovery-probing"],
+          "live_features": [
+            "recovery-probing"
+          ],
           "notes": "Single GET per identifier; state-changing requests capped by caller."
         }
       ]
@@ -61,7 +67,9 @@
           "path": "offensive/live-recon",
           "mode": "real",
           "live": true,
-          "live_features": ["recovery-reveal"],
+          "live_features": [
+            "recovery-reveal"
+          ],
           "notes": "Differential parse of revealed digit; consent + rate-limit conditions."
         }
       ]
@@ -77,11 +85,21 @@
           "path": "offensive/live-recon",
           "mode": "real",
           "live": true,
-          "live_features": ["people-search"],
+          "live_features": [
+            "people-search"
+          ],
           "notes": "Consent-gated; one source per run (data minimisation). Multi-source aggregation pending."
         }
       ],
-      "source_whitelist": ["spokeo", "pipl", "truepeoplesearch", "fastpeoplesearch", "thats-them", "truecaller", "voter-records"]
+      "source_whitelist": [
+        "spokeo",
+        "pipl",
+        "truepeoplesearch",
+        "fastpeoplesearch",
+        "thats-them",
+        "truecaller",
+        "voter-records"
+      ]
     },
     {
       "id": "active-scanning",
@@ -94,7 +112,9 @@
           "path": "offensive/live-recon",
           "mode": "real",
           "live": true,
-          "live_features": ["active-scanning"],
+          "live_features": [
+            "active-scanning"
+          ],
           "notes": "TCP connect + one GET per target (read-only). Nmap/nuclei integration pending."
         }
       ]
@@ -110,7 +130,9 @@
           "path": "offensive/attack-path/internal/shodan",
           "mode": "real",
           "live": true,
-          "live_features": ["shodan"],
+          "live_features": [
+            "shodan"
+          ],
           "notes": "Dork builder + client; part of the attack-path enrichment stage."
         }
       ]
@@ -126,7 +148,9 @@
           "path": "offensive/attack-path/internal/enrich",
           "mode": "partial",
           "live": true,
-          "live_features": ["enrich"],
+          "live_features": [
+            "enrich"
+          ],
           "notes": "Enrichment stage for attack-path context. No dedicated GeoIP runner yet."
         }
       ]
@@ -142,112 +166,10 @@
           "path": "offensive/live-recon",
           "mode": "real",
           "live": true,
-          "live_features": ["authenticated-scrape"],
+          "live_features": [
+            "authenticated-scrape"
+          ],
           "notes": "Authed GET works; contact parsing (email/phone from HTML/JSON) pending."
-        }
-      ]
-    },
-    {
-      "id": "social-scoring",
-      "name": "Trait/profiling-based social scoring",
-      "description": "Scored, explainable dossier from OSINT hits (evidence pack, not verdict engine).",
-      "components": [
-        {
-          "id": "social-scoring",
-          "repo": "open-decision-platform",
-          "path": "decision/social-scoring",
-          "mode": "pending",
-          "live": false,
-          "notes": "Planned. Inputs = OSINT hits from other categories; outputs = scored dossier with cited inputs."
-        }
-      ]
-    },
-    {
-      "id": "credibility",
-      "name": "Credibility / evidence-reliability annotation",
-      "description": "Advisory reliability annotation (provenance, corroboration, recency, contradiction).",
-      "components": [
-        {
-          "id": "credibility",
-          "repo": "open-decision-platform",
-          "path": "decision/credibility",
-          "mode": "pending",
-          "live": false,
-          "notes": "Planned. Advisory-only — never a guilt/credibility verdict."
-        }
-      ]
-    },
-    {
-      "id": "biometric-scrape",
-      "name": "Untargeted facial-image scraping",
-      "description": "Scrape internet/CCTV sources for face images; detect + categorise.",
-      "components": [
-        {
-          "id": "biometric-scrape",
-          "repo": "open-biometric-platform",
-          "path": "biometric-scrape",
-          "mode": "real",
-          "live": true,
-          "live_features": ["scrape"],
-          "basis": "prohibited",
-          "notes": "Untargeted mass scraping = prohibited by default (GDPR + AI Act). Requires DPiA."
-        }
-      ]
-    },
-    {
-      "id": "biometric-categorise",
-      "name": "Sensitive biometric categorisation",
-      "description": "Label faces by sensitivity category (public_figure, employee, minor, health, religion, general).",
-      "components": [
-        {
-          "id": "biometric-categorise",
-          "repo": "open-biometric-platform",
-          "path": "biometric-categorise",
-          "mode": "real",
-          "live": true,
-          "live_features": ["categorise"],
-          "basis": "requires_dpia",
-          "notes": "Minors + special-category force DPiA + shorter retention."
-        }
-      ]
-    },
-    {
-      "id": "rbris",
-      "name": "Real-time remote biometric ID in public spaces",
-      "description": "CCTV ingest + real-time face match against enrolled gallery.",
-      "components": [
-        {
-          "id": "biometric-cctv",
-          "repo": "open-biometric-platform",
-          "path": "biometric-cctv",
-          "mode": "real",
-          "live": true,
-          "live_features": ["ingest"],
-          "basis": "prohibited",
-          "notes": "Prohibited without LE warrant / AI Act basis. Same for biometric-rbr."
-        }
-      ]
-    },
-    {
-      "id": "person-graph",
-      "name": "Cross-case / cross-agency person graphs",
-      "description": "Pseudonym person nodes + hash-chained events; cross-agency via ODP envelope exchange.",
-      "components": [
-        {
-          "id": "biometric-graph",
-          "repo": "open-biometric-platform",
-          "path": "biometric-graph",
-          "mode": "real",
-          "live": true,
-          "notes": "Pseudonym nodes; name mapping agency-local."
-        },
-        {
-          "id": "ontology",
-          "repo": "open-decision-platform",
-          "path": "platform/ontology",
-          "mode": "real",
-          "live": true,
-          "notes": "SQLite store; cross-agency via ODP envelope events."
         }
       ]
     }

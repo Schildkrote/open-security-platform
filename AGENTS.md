@@ -4,7 +4,7 @@ Guidance for AI coding agents (and humans) working in this repository.
 
 ## What this repo is
 
-`open-security-platform` is a polyglot Apache-2.0 security monorepo: 20 components (plus `platform/` + `integration/`)
+`open-security-platform` is a polyglot AGPL-3.0-only security monorepo: 19 components (plus `platform/` + `integration/`)
 across five portfolios — `identity/`, `ai-security/`, `ai-governance/`,
 `offensive/`, and `soc/`. Non-oiaf components are self-contained MVPs with mock/in-memory backends.
 A **subset** is proven on the `integration/` spine (redteam → pentest → compliance
@@ -78,7 +78,7 @@ changes and ensure it passes.**
   offline/mock model — never break it. Connector interfaces live in the OSS
   core; each ships a real implementation (public API, user-supplied credentials)
   plus a mock implementation for offline dev/tests.
-- Go sources require the Apache-2.0 license header (enforced by
+- Go sources require the AGPL-3.0-only license header (enforced by
   `.licenserc.yaml`), **except** `identity/oiaf/**` which is excluded.
 
 

@@ -1,5 +1,5 @@
 // Copyright 2026 open-security-platform Authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Package geo provides offline IP/phone geolocation enrichment for attack
 // graph nodes. The default source is a built-in static table (deterministic,

@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   model, and the `identity/oiaf` subtree warning.
 - Python lint (ruff, `ruff.toml`) and TypeScript lint (Biome, `biome.json`)
   wired into the Lint CI workflow.
-- All components licensed under Apache-2.0.
+- All components licensed under AGPL-3.0-only.
 
 ### Changed
 - Go module paths normalized from `github.com/example/*` to

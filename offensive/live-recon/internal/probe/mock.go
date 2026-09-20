@@ -1,5 +1,5 @@
 // Copyright 2026 open-security-platform Authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Package probe mock implementations: deterministic, offline, CI-safe. Each
 // mock mirrors one real Runner and returns a fixed, clearly-synthetic result

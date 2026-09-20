@@ -1,5 +1,5 @@
 // Copyright 2026 open-security-platform Authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Package passive provides offline-first passive domain intelligence:
 // DNS record lookups, certificate transparency history, WHOIS basics, and

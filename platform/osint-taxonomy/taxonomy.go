@@ -1,17 +1,17 @@
 // Copyright 2026 open-security-platform Authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Package osinttaxonomy is the canonical OSINT category taxonomy (Phase 3,
 // the single source of truth that live-recon, username-enum, and the
 // people-search source whitelist all read from). It mirrors the pattern of
-// platform/lawful-basis: one JSON file, a Go loader, a golden hash test.
+// Pattern: one JSON file, a Go loader, a golden hash test.
 //
 // The taxonomy is NOT a policy engine — it maps OSINT categories to the
 // components that implement them, their live-gate features, and (for
-// biometric rows) the default lawful basis. Consumers use it to:
+// sensitive rows) the default lawful basis. Consumers use it to:
 //   - build source whitelists (people-search)
 //   - discover live-gate features (live-recon, username-enum)
-//   - enforce basis gates (biometric-scrape, rbris, categorise)
+//   - enforce basis gates where a lawful basis applies
 package osinttaxonomy
 
 import (
@@ -40,7 +40,7 @@ type Component struct {
 	Mode         string   `json:"mode"` // real | partial | pending
 	Live         bool     `json:"live"`
 	LiveFeatures []string `json:"live_features,omitempty"`
-	Basis        string   `json:"basis,omitempty"` // prohibited | requires_dpia | consent (biometric rows)
+	Basis        string   `json:"basis,omitempty"` // prohibited | requires_dpia | consent (sensitive rows)
 	Notes        string   `json:"notes,omitempty"`
 }
 
@@ -124,7 +124,7 @@ func (t *Taxonomy) SourceWhitelistFor(categoryID string) ([]string, error) {
 	return cat.SourceWhitelist, nil
 }
 
-// BasisFor returns the default lawful basis for a biometric category ("" if not biometric).
+// BasisFor returns the default lawful basis for a sensitive category ("" if none).
 func (t *Taxonomy) BasisFor(categoryID string) (string, error) {
 	cat, err := t.ByID(categoryID)
 	if err != nil {

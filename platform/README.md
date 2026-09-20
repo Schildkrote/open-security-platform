@@ -25,6 +25,6 @@ network fetch, no `replace` needed in workspace mode).
 ## Conventions
 
 - **stdlib only** — no third-party runtime dependencies.
-- Apache-2.0, like the rest of the repo.
+- AGPL-3.0-only, like the rest of the repo.
 - Adding a new shared package: keep it cross-cutting and dependency-free, add
   tests, and ensure `make verify` stays green.

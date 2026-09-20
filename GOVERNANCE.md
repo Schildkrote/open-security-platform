@@ -1,7 +1,7 @@
 # Governance
 
 open-security-platform is an open-source project governed by its maintainers and
-community under the Apache-2.0 license.
+community under the AGPL-3.0-only license.
 
 ## Principles
 

@@ -24,11 +24,6 @@
                     rag-authorization                   agent-redteam-range
                     agent-sandbox
 
-   biometric/ (open-biometric-platform)   decision/ (open-decision-platform)
-   ------------------------------         ----------------------------------
-   lawful-basis + audit + rbr match       ontology + policy + packs (SQLite)
-        |        pseudonymized hits  ->        |
-        +------ exporter (hash chain) --  pack-gated webhook bridge
 ```
 
 The components are designed to interoperate: `ai-redteam-platform` embeds
@@ -36,10 +31,6 @@ The components are designed to interoperate: `ai-redteam-platform` embeds
 targets; findings flow to `pentest-manager`; technique mapping aligns with
 `purple-team`; evidence is compatible with `ai-compliance-hub`; privileged
 actions can be brokered through `open-pam-jit` and run inside `agent-sandbox`.
-`biometric/` exports pseudonymized match hits to `decision/` over the live
-webhook bridge (see `biometric/docs/obp-odp-bridge.md`): OBP's lawful-basis
-gate decides *may we touch this face*, decision-platform's policy engine +
-jurisdiction packs decide *may this hit be written under this purpose/role*.
 
 ### Shared platform layer
 
@@ -90,16 +81,6 @@ jurisdiction packs decide *may this hit be written under this purpose/role*.
 |---|---|---|
 | [open-soar](soc/open-soar/) | Node/TS | SOAR / IR automation: playbook DAG engine, cases, enrichment, response, AI triage |
 
-### biometric/ — consent-gated face analytics (open-biometric-platform subtree)
-| Component | Lang | What it does |
-|---|---|---|
-| [open-biometric-platform](biometric/) | Go+Python | Pseudo-first face gallery: lawful-basis gate (single matrix), hash-chained audit on every face-touch, centroid train/match (rbr), InsightFace embeddings (table/onnx), scrape→categorise→CCTV pipeline; exports pseudonymized hits to the decision platform |
-
-### decision/ — ontology & policy decisions (open-decision-platform subtree)
-| Component | Lang | What it does |
-|---|---|---|
-| [open-decision-platform](decision/) | Go | Ontology OS: typed objects/links (SQLite/JSON), LE-aware policy engine + jurisdiction packs on the hot path (ALPR/actions/webhook), hash-chained audit, OBP/OSP/OSINT connectors, dossier & context-bundle apps |
-
 ## Quickstart
 
 ```bash
@@ -145,7 +126,7 @@ deploy them publicly. See each component's README and [SECURITY.md](SECURITY.md)
 
 ## License
 
-[Apache-2.0](LICENSE). © open-security-platform Authors.
+[AGPL-3.0-only](LICENSE). © open-security-platform Authors.
 
 ## Governance
 
