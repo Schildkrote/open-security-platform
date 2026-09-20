@@ -20,7 +20,6 @@ import json
 import os
 import shutil
 import struct
-import sys
 import tempfile
 import time
 import unittest
