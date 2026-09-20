@@ -1,22 +1,90 @@
-site_name: open-security-platform
-site_description: An open-source security platform monorepo.
-repo_url: https://github.com/open-security-platform/open-security-platform
-edit_uri: ""
+site_name: Open Security Platform
+site_description: >-
+  An open-source security platform monorepo — self-hostable, developer-friendly
+  components for identity, AI security, AI governance, offensive security, and
+  security operations.
+site_url: https://schildkrote.github.io/open-security-platform/
+repo_url: https://github.com/Schildkrote/open-security-platform
+edit_uri: edit/main/docs/
 
 theme:
-  name: mkdocs
+  name: material
   locale: en
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.tabs.link
+    - toc.follow
 
 nav:
   - Home: index.md
-  - Identity: identity.md
-  - AI Security: ai-security.md
-  - AI Governance: ai-governance.md
-  - Offensive: offensive.md
-  - Offensive OSINT Taxonomy: osint.md
-  - SOC: soc.md
+  - Portfolios:
+      - Identity: identity.md
+      - AI Security: ai-security.md
+      - AI Governance: ai-governance.md
+      - Offensive: offensive.md
+      - Offensive OSINT Taxonomy: osint.md
+      - SOC: soc.md
+  - Vendor Comparison:
+      - Overview: comparison.md
+      - Identity: comparison-identity.md
+      - AI Security: comparison-ai-security.md
+      - AI Governance: comparison-ai-governance.md
+      - Offensive: comparison-offensive.md
+      - SOC: comparison-soc.md
   - Contributing: contributing.md
 
 markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
   - tables
-  - fenced_code
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Schildkrote/open-security-platform
+      name: open-security-platform on GitHub
+
+copyright: Copyright &copy; open-security-platform Authors &mdash; AGPL-3.0-only

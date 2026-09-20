@@ -16,7 +16,7 @@ security products across five portfolios.
 
 Each component is self-contained with its own `README.md`, `NEXT_STEPS.md`, and
 tests. See the portfolio pages for details, or the
-[repository README](https://github.com/open-security-platform/open-security-platform).
+[repository README](https://github.com/Schildkrote/open-security-platform).
 
 ## Quickstart
 
