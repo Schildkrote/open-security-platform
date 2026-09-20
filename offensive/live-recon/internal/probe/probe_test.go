@@ -190,6 +190,7 @@ func TestExternalScanUnavailable(t *testing.T) {
 	// "unavailable" (not fail) so the active-scanner degrades gracefully.
 	e := NewExternalScan()
 	e.Nmap = "/nonexistent/nmap"
+	e.Nuclei = "/nonexistent/nuclei"
 	ev, err := e.RunNmap(context.Background(), "127.0.0.1", "80")
 	if err != nil {
 		t.Fatalf("RunNmap with missing binary should not error, got: %v", err)
