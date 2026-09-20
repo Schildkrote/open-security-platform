@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `ai-governance/ai-compliance-hub`: framework citation registry + validator
+  (`frameworks.py`) covering EU AI Act (36 articles/annexes, OJ-published
+  numbering), ISO/IEC 42001 (38 Annex A controls + 12 clauses), NIST AI RMF
+  (shape + category bounds), SOC 2 TSC and OWASP LLM Top 10. Known-bad
+  citations are rejected with the correct reference named.
+- `ai-compliance-hub`: control library expanded 6 → 46 controls across 8
+  families (146 distinct framework citations), plus coverage/gap reporting and
+  new API endpoints `/frameworks`, `/controls/coverage`, `/controls/gaps`,
+  `/controls/validate`. `POST /controls` now rejects invalid citations with 400.
+
+### Fixed
+- `ai-compliance-hub`: corrected mis-cited framework references in the control
+  library — EU AI Act `Article 62` → `Article 73` (serious-incident reporting;
+  61/62 are pre-OJ draft numbers), and removed non-existent ISO/IEC 42001
+  controls `A.7.7`, `A.8.6` plus a wrong `A.8.2` mapping. Now guarded by
+  regression tests so citation rot fails the build.
+
 ## [0.1.0] - 2026-07-23
 
 ### Added
