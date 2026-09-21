@@ -8,7 +8,7 @@ import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from . import auth, cards, controls, evidence, models, webhook
+from . import auth, cards, controls, evidence, frameworks, models, webhook
 
 
 def make_handler(conn: sqlite3.Connection) -> type[BaseHTTPRequestHandler]:
@@ -49,6 +49,33 @@ def make_handler(conn: sqlite3.Connection) -> type[BaseHTTPRequestHandler]:
                 if fw:
                     return self._send(200, controls.controls_for_framework(conn, fw))
                 return self._send(200, controls.list_controls(conn))
+            if path == "/frameworks":
+                return self._send(200, {
+                    "frameworks": frameworks.FRAMEWORKS,
+                    "labels": frameworks.FRAMEWORK_LABELS,
+                    "registered_references": frameworks.registry_summary(),
+                    "catalog": frameworks.framework_catalog(),
+                })
+            if path == "/controls/coverage":
+                return self._send(200, {
+                    "controls": len(controls.list_controls(conn)),
+                    "by_framework": controls.framework_coverage(conn),
+                    "by_family": {
+                        fam: len(items)
+                        for fam, items in controls.controls_by_family(conn).items()
+                    },
+                })
+            if path == "/controls/gaps":
+                fw = params.get("framework")
+                wanted = [fw] if fw else None
+                gaps = controls.coverage_gaps(conn, wanted)
+                return self._send(200, {
+                    name: {"count": len(titles), "controls": titles}
+                    for name, titles in gaps.items()
+                })
+            if path == "/controls/validate":
+                errors = frameworks.validate_library(controls.DEFAULT_CONTROLS)
+                return self._send(200, {"valid": not errors, "errors": errors})
             if path == "/risks":
                 return self._send(200, models.list_risks(conn))
             if path == "/evidence":
@@ -74,6 +101,13 @@ def make_handler(conn: sqlite3.Connection) -> type[BaseHTTPRequestHandler]:
                 if path == "/systems":
                     return self._send(201, models.register_system(conn, **body))
                 if path == "/controls":
+                    # Reject invalid framework citations at the API boundary so a
+                    # bad reference never reaches the stored library. Import via
+                    # OSCAL stays permissive (import_catalog) - this guard is for
+                    # directly-authored controls only.
+                    errors = frameworks.validate_mappings(body.get("mappings") or {})
+                    if errors:
+                        return self._send(400, {"error": "invalid citation", "details": errors})
                     return self._send(201, controls.add_control(conn, **body))
                 if path == "/risks":
                     return self._send(201, models.add_risk(conn, **body))

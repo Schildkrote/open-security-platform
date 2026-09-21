@@ -1,6 +1,7 @@
 import json
 import threading
 import unittest
+import urllib.error
 import urllib.request
 
 from compliance_hub import api, cards, controls, db, evidence, models
@@ -84,7 +85,83 @@ class ApiTests(unittest.TestCase):
         card = self._get(f"/systems/{system['id']}/card")["card"]
         self.assertIn("AI System Card: Bot", card)
         eu = self._get("/controls?framework=EU_AI_ACT")
-        self.assertGreaterEqual(len(eu), 5)
+        self.assertGreaterEqual(len(eu), 25)
+
+    def test_frameworks_endpoint(self):
+        body = self._get("/frameworks")
+        self.assertIn("EU_AI_ACT", body["frameworks"])
+        self.assertEqual(body["registered_references"]["OWASP_LLM_TOP10"], 10)
+        self.assertIn("A.7.4", body["catalog"]["ISO_42001"]["references"])
+
+    def test_controls_coverage_endpoint(self):
+        body = self._get("/controls/coverage")
+        self.assertGreaterEqual(body["controls"], len(controls.DEFAULT_CONTROLS))
+        self.assertGreaterEqual(body["by_framework"]["EU_AI_ACT"], 25)
+        self.assertIn("Governance", body["by_family"])
+
+    def test_controls_gaps_endpoint(self):
+        body = self._get("/controls/gaps")
+        self.assertIn("SOC2_AI", body)
+        self.assertIn("count", body["SOC2_AI"])
+        self.assertIn("controls", body["SOC2_AI"])
+        scoped = self._get("/controls/gaps?framework=EU_AI_ACT")
+        self.assertEqual(list(scoped), ["EU_AI_ACT"])
+
+    def test_controls_validate_endpoint(self):
+        body = self._get("/controls/validate")
+        self.assertTrue(body["valid"])
+        self.assertEqual(body["errors"], [])
+
+    def _post_status(self, path, payload):
+        """POST that returns (status, parsed body) instead of raising on 4xx."""
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    def test_post_control_rejects_invalid_citation(self):
+        status, body = self._post_status(
+            "/controls",
+            {
+                "title": "Bad Control",
+                "family": "Risk",
+                "mappings": {"EU_AI_ACT": ["Article 62"]},
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "invalid citation")
+        self.assertIn("Article 73", body["details"][0])
+        # Nothing was stored.
+        titles = [c["title"] for c in self._get("/controls")]
+        self.assertNotIn("Bad Control", titles)
+
+    def test_post_control_rejects_unknown_framework(self):
+        status, body = self._post_status(
+            "/controls",
+            {"title": "X", "mappings": {"GDPR": ["Article 5"]}},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("unknown framework", body["details"][0])
+
+    def test_post_control_accepts_valid_citation(self):
+        status, body = self._post_status(
+            "/controls",
+            {
+                "title": "Good Control",
+                "family": "Risk",
+                "mappings": {"EU_AI_ACT": ["Article 73"], "ISO_42001": ["A.8.4"]},
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(body["title"], "Good Control")
+        self.assertIn("EU_AI_ACT", body["mappings"])
 
 
 if __name__ == "__main__":
