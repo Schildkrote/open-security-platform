@@ -18,6 +18,47 @@ tamper-evident audit trail. Zero runtime dependencies (Node 22 stdlib + `node:sq
   clients never see credentials
 - **Hash-chained audit log** with integrity verification
 - Pluggable **tool executor** (offline mock included)
+- **Real MCP transports** for upstream servers, selectable per server:
+  - **Streamable-HTTP/SSE** — register an http(s) `endpoint`
+  - **stdio** — register a `stdio:` endpoint; the gateway spawns the child MCP
+    server (newline-delimited JSON-RPC over stdin/stdout, `initialize`
+    handshake, id-correlated requests, notification pass-through, timeouts,
+    dead-child handling)
+  - All calls pass through the same registry/allowlist/policy/poisoning/audit
+    pipeline regardless of transport — denied calls never reach (or spawn) an
+    upstream server.
+
+## Transports
+
+`MCP_TRANSPORT` selects the executor at startup:
+
+```bash
+MCP_TRANSPORT=http   npm start   # all endpoints treated as Streamable-HTTP
+MCP_TRANSPORT=stdio  npm start   # all endpoints treated as stdio children
+MCP_TRANSPORT=auto   npm start   # per-server: `stdio:` prefix vs http(s) URL
+npm start                        # unset: offline mock executor (default)
+```
+
+A server's registered `endpoint` decides its upstream transport:
+
+```bash
+# Remote Streamable-HTTP server
+curl -X POST localhost:8084/admin/servers \
+  -d '{"id":"remote","name":"Remote","endpoint":"https://mcp.example.com/rpc"}'
+
+# Local stdio server (whitespace form: stdio:<command> [args...])
+curl -X POST localhost:8084/admin/servers \
+  -d '{"id":"local","name":"Local","endpoint":"stdio:node /srv/mcp-server/index.js"}'
+
+# stdio JSON form — required when args contain spaces
+curl -X POST localhost:8084/admin/servers -d '{"id":"ts","name":"TS child",
+  "endpoint":"stdio:{\"command\":\"node\",\"args\":[\"--experimental-strip-types\",\"/srv/my server.ts\"]}"}'
+```
+
+Children are spawned **without a shell**, so endpoint strings cannot inject
+shell metacharacters; one child per endpoint is reused across calls and
+killed when the gateway exits. Stdio tests run fully offline against an
+in-repo fake MCP child (`test/fixtures/fake-mcp-child.ts`).
 
 ## Quickstart
 
