@@ -28,7 +28,13 @@ PM_HOST="http://127.0.0.1:$PM_PORT"
 PM_LOG="$LIVE_TMP/defectdojo-pm.log"
 
 step "Waiting for DefectDojo health"
-wait_url "defectdojo" "$DD_HOST/login/" 600 200
+# Path must be one that returns exactly 200: wait_url does an exact status match.
+# This build of DefectDojo answers /login/ with 404 and serves the login page at
+# /login?next=/ (verified: /login/ -> 404, /login?next=/ -> 200, / -> 302). The
+# old "/login/" never matched 200, so this proof always timed out after 600s and
+# reported FAIL even when DefectDojo was serving correctly — the same trailing
+# -slash/404 bug that made the compose healthcheck fail, in the proof itself.
+wait_url "defectdojo" "$DD_HOST/login?next=/" 600 200
 
 step "Obtaining a DefectDojo API token for ${DD_ADMIN_USER}"
 DD_TOKEN="$(curl -s -X POST "$DD_HOST/api/v2/api-token-auth/" \

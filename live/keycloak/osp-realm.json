@@ -3,6 +3,41 @@
   "enabled": true,
   "displayName": "open-security-platform local proof realm",
   "attributes": {
-    "osp.purpose": "local live-proof harness only — loopback-bound, never a real IdP config"
-  }
+    "osp.purpose": "local live-proof harness only - loopback-bound, never a real IdP config"
+  },
+  "clients": [
+    {
+      "clientId": "osp-proof",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "osp-proof-client-secret-local",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "fullScopeAllowed": true,
+      "attributes": {
+        "client.use.lightweight.access.token.enabled": "false"
+      },
+      "redirectUris": [
+        "http://127.0.0.1:18082/*"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "osp-proof-user",
+      "enabled": true,
+      "email": "osp-proof@example.invalid",
+      "emailVerified": true,
+      "firstName": "OSP",
+      "lastName": "Proof",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "osp-proof-user-password-local",
+          "temporary": false
+        }
+      ]
+    }
+  ]
 }
