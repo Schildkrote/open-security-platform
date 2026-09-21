@@ -1,0 +1,5 @@
+# Generated / local-only artifacts of the proof harness.
+.env
+config/wazuh/*
+!config/wazuh/.gitkeep
+tmp/

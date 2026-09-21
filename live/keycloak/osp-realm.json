@@ -1,0 +1,8 @@
+{
+  "realm": "osp",
+  "enabled": true,
+  "displayName": "open-security-platform local proof realm",
+  "attributes": {
+    "osp.purpose": "local live-proof harness only — loopback-bound, never a real IdP config"
+  }
+}
