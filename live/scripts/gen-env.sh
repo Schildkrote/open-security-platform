@@ -33,7 +33,7 @@ KEYCLOAK_ADMIN_PASSWORD="$(rand_hex 16)"
 DD_SECRET_KEY="$(rand_hex 32)"
 DD_CREDENTIAL_AES_256_KEY="$(rand_hex 16)" # exactly 32 chars
 # shellcheck disable=SC2034
-BAO_ROOT_TOKEN="osp-…ex 8)"
+BAO_ROOT_TOKEN="osp-$(rand_hex 8)"
 
 umask 077
 cat > "$ENV_FILE" <<EOF
