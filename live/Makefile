@@ -39,7 +39,32 @@ certs: config ## Generate Wazuh TLS certs via the one-shot cert-generator servic
 		test -f config/wazuh/certs/root-ca.pem || { echo "cert generation failed" >&2; exit 1; }; \
 	fi
 
-up: env config certs ## Bring the whole stack up (detached) and wait for health
+check-mounts: ## Verify every bind-mounted source path exists before compose tries
+	@# Docker creates a MISSING bind-mount source as a directory, so a typo in a
+	@# mount path surfaces either as a confusing "permission denied" (when the
+	@# parent dir is not writable) or as a service that silently mounts an empty
+	@# directory. Both bugs below shipped in the harness for that reason:
+	@#   * root-ca-manager.pem — never generated (the generator writes root-ca.pem)
+	@#   * postgres mounted at /var/lib/postgresql/data — wrong for postgres:18
+	@# Fail loudly and name the file instead.
+	@#
+	@# The existence test is done INSIDE python, not in a shell loop: repo paths
+	@# may contain spaces (e.g. "GitHub repos"), and a shell `for src in $$(...)`
+	@# splits on them, reporting bogus MISSING paths.
+	@$(COMPOSE) config --format json 2>/dev/null | python3 -c '\
+import json, os, sys;\
+d = json.load(sys.stdin);\
+srcs = sorted({b.get("source", "") for s in d.get("services", {}).values() \
+               for b in (s.get("volumes") or []) \
+               if b.get("type") == "bind" and b.get("source")});\
+missing = [s for s in srcs if not os.path.exists(s)];\
+[print("MISSING bind-mount source: " + s, file=sys.stderr) for s in missing];\
+print("checked %d bind-mount sources" % len(srcs));\
+sys.exit(1 if missing else 0)' \
+	&& echo "all bind-mount sources present" \
+	|| { echo "Refusing to start: fix the paths above (see live/docker-compose.yml)." >&2; exit 1; }
+
+up: env config certs check-mounts ## Bring the whole stack up (detached) and wait for health
 	@$(COMPOSE) up -d
 	@$(MAKE) wait
 
