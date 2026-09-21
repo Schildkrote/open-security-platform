@@ -1,0 +1,4 @@
+# This directory holds the pinned Wazuh single-node config files fetched by
+# live/scripts/fetch-wazuh-config.sh (sha256-verified against wazuh-docker
+# v4.14.7) plus generated TLS certificates. Everything here except this
+# .gitkeep is git-ignored: it is third-party config and regenerable material.

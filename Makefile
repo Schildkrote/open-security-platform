@@ -5,7 +5,12 @@ GO_DIRS   := platform identity/oiaf identity/open-pam-jit ai-security/open-ai-ga
 NODE_DIRS := identity/agent-identity ai-security/ai-access-broker ai-security/mcp-security-gateway offensive/pentest-manager soc/open-soar
 PY_DIRS   := ai-security/rag-authorization ai-security/agent-sandbox ai-governance/ai-compliance-hub ai-governance/ai-redteam-evals ai-governance/ai-redteam-platform offensive/purple-team offensive/agent-redteam-range
 
-.PHONY: help test test-go test-node test-python build build-go lint fmt verify integration docs clean list
+.PHONY: help test test-go test-node test-python build build-go lint fmt verify integration docs clean list \
+	live-up live-proofs live-down
+
+# NOTE: live/ (the local Docker proof harness) is intentionally NOT part of the
+# test/verify fan-out above: it requires Docker and must never break offline CI.
+# Use the live-* targets below (or make -C live) explicitly.
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -44,6 +49,15 @@ verify: lint test ## Lint then test everything
 
 integration: ## Run the end-to-end cross-component flows (needs go + node + python)
 	@python3 -m unittest discover -v -s integration/tests -t .
+
+live-up: ## REQUIRES DOCKER: bring up the local proof stack (live/, see live/README.md)
+	@$(MAKE) -C live up
+
+live-proofs: ## REQUIRES DOCKER: run all Mock->Real connector proofs against the live stack
+	@$(MAKE) -C live proofs
+
+live-down: ## REQUIRES DOCKER: stop the live stack and remove its volumes
+	@$(MAKE) -C live down
 
 docs: ## Serve the docs site with mkdocs (if installed)
 	@command -v mkdocs >/dev/null 2>&1 && mkdocs serve || echo "mkdocs not installed (pip install mkdocs)"
