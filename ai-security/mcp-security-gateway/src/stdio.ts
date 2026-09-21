@@ -47,9 +47,18 @@ export interface StdioTransportOptions {
   // Notifications from the child (no id) are passed through to this callback.
   onNotification?: (endpoint: string, notification: JsonRpcNotification) => void;
   env?: Record<string, string | undefined>;
+  // Grace period after SIGTERM before escalating to SIGKILL in close().
+  killGraceMs?: number;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+// Grace period after SIGTERM before SIGKILL. Short: an MCP child is expected to
+// exit promptly on stdin EOF, and a hung child must not delay gateway shutdown.
+const DEFAULT_KILL_GRACE_MS = 2_000;
+// Hard cap on an unterminated stdout frame. Generous (1 MiB) versus any real
+// MCP tool response, but bounded so a child emitting an endless newline-free
+// stream cannot grow gateway memory without limit.
+const MAX_FRAME_BYTES = 1_048_576;
 const PROTOCOL_VERSION = "2024-11-05";
 
 type RequestId = number | string;
@@ -71,6 +80,7 @@ class StdioSession {
   private endpoint: string;
   private opts: StdioTransportOptions;
   private timeoutMs: number;
+  private killGraceMs: number;
 
   // Note: explicit fields, not TS parameter properties — Node's
   // --experimental-strip-types rejects parameter properties (erasable syntax only).
@@ -78,6 +88,7 @@ class StdioSession {
     this.endpoint = endpoint;
     this.opts = opts;
     this.timeoutMs = timeoutMs;
+    this.killGraceMs = opts.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
     this.child = spawn(cmd.command, cmd.args, {
       shell: false, // never a shell: endpoint strings must not inject metacharacters
       stdio: ["pipe", "pipe", "inherit"],
@@ -157,6 +168,16 @@ class StdioSession {
 
   private onData(chunk: string): void {
     this.buffer += chunk;
+    // Guard against an unbounded newline-free stdout from a buggy or hostile
+    // child growing gateway memory without limit. A well-formed MCP frame is one
+    // JSON object per line, well under this cap; exceeding it means the child is
+    // misbehaving, so drop the buffer and fail the session rather than buffer on.
+    if (this.buffer.length > MAX_FRAME_BYTES && this.buffer.indexOf("\n") === -1) {
+      this.buffer = "";
+      this.failAll(`child exceeded ${MAX_FRAME_BYTES}-byte frame cap without a newline`);
+      this.closeSync();
+      return;
+    }
     let nl = this.buffer.indexOf("\n");
     while (nl !== -1) {
       const line = this.buffer.slice(0, nl).replace(/\r$/, "");
@@ -217,14 +238,37 @@ class StdioSession {
   }
 
   close(): void {
-    this.dead = true;
-    for (const p of this.pending.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("mcp stdio: transport closed"));
+    this.failAll("transport closed");
+    try {
+      this.child.stdin?.end(); // EOF is the spec's own shutdown signal
+    } catch {
+      // stdin already closed
     }
-    this.pending.clear();
-    this.child.stdin?.end();
-    this.child.kill("SIGTERM");
+    if (this.running()) {
+      this.child.kill("SIGTERM");
+      // Escalate to SIGKILL if the child ignores SIGTERM. unref() so this timer
+      // can never hold the event loop open or keep the gateway alive.
+      setTimeout(() => {
+        if (this.running()) this.child.kill("SIGKILL");
+      }, this.killGraceMs).unref();
+    }
+  }
+
+  // Synchronous shutdown for process-exit hooks, where timers cannot run and
+  // there is no opportunity to escalate asynchronously. Trades gracefulness for
+  // a guarantee: the child must not outlive the gateway and become an orphan.
+  closeSync(): void {
+    this.failAll("transport closed");
+    try {
+      this.child.stdin?.end();
+    } catch {
+      // stdin already closed
+    }
+    if (this.running()) this.child.kill("SIGKILL");
+  }
+
+  private running(): boolean {
+    return this.child.exitCode === null && this.child.signalCode === null;
   }
 }
 
@@ -271,6 +315,14 @@ export class StdioTransport implements Transport {
 
   closeAll(): void {
     for (const session of this.sessions.values()) session.close();
+    this.sessions.clear();
+  }
+
+  // Synchronous variant for process-exit hooks: timers cannot run there, so
+  // children are killed outright rather than asked politely. This is what keeps
+  // a dying gateway from leaving orphaned MCP child processes behind.
+  closeAllSync(): void {
+    for (const session of this.sessions.values()) session.closeSync();
     this.sessions.clear();
   }
 }

@@ -63,7 +63,7 @@ export class MockTransport implements Transport {
 // per-upstream-server transport switch the gateway config uses.
 export class CompositeTransport implements Transport {
   private http: Transport;
-  private stdio: Transport & { closeAll(): void };
+  private stdio: Transport & { closeAll(): void; closeAllSync(): void };
 
   // Explicit fields, not parameter properties (--experimental-strip-types).
   constructor(http: Transport = new HttpTransport(), stdio?: StdioTransport) {
@@ -82,6 +82,17 @@ export class CompositeTransport implements Transport {
 
   close(): void {
     this.stdio.closeAll();
+  }
+
+  // For process-exit hooks, where the graceful path's timers cannot run.
+  closeSync(): void {
+    this.stdio.closeAllSync();
+  }
+
+  // Named alias so composite and bare stdio transports are interchangeable for
+  // the shutdown hook.
+  closeAllSync(): void {
+    this.closeSync();
   }
 }
 

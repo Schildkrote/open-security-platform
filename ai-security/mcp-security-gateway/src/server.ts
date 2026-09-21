@@ -33,12 +33,24 @@ export const defaultPolicy = new PolicyEngine([
   { name: "approve-payments", toolPattern: "^payment", decision: "approve", reason: "financial action" },
 ]);
 
-export function buildHandler(db: DB, gateway: Gateway) {
+export function buildHandler(db: DB, gateway: Gateway, adminToken?: string) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
     const method = req.method ?? "GET";
     try {
       if (path === "/healthz") return json(res, 200, { ok: true });
+
+      // The /admin/* surface can register arbitrary upstream servers — including
+      // `stdio:` endpoints that spawn local processes — so it must never be
+      // reachable unauthenticated on a network interface. When an admin token
+      // is configured, every /admin/* call must present it as a bearer token.
+      // Constant-time-ish comparison is unnecessary here (the value is a shared
+      // secret compared once per request), but we do compare full strings.
+      if (path.startsWith("/admin/") && adminToken) {
+        if (principalOf(req) !== adminToken) {
+          return json(res, 401, { error: "unauthorized: admin token required" });
+        }
+      }
 
       if (path === "/mcp" && method === "POST") {
         const rpc = JSON.parse(await readBody(req)) as JsonRpcRequest;
@@ -85,18 +97,51 @@ if (isMain) {
   // is approved, never instead of the checks.
   const transportMode = process.env.MCP_TRANSPORT ?? "";
   const endpointFor = (tool: registry.McpTool) => registry.getServer(db, tool.server_id)?.endpoint ?? null;
+  // Any transport that can hold stdio child processes must be reaped on exit,
+  // otherwise a gateway killed with SIGTERM/SIGINT leaves orphaned children.
+  // closeAllSync (not closeAll) is used in the exit hook: timers cannot run
+  // during process teardown, so the graceful SIGTERM-then-SIGKILL path would
+  // never escalate and the children would survive.
+  let stdioLike: StdioTransport | CompositeTransport | null = null;
   if (transportMode === "http") {
     options.executor = makeExecutor(new HttpTransport(), endpointFor);
   } else if (transportMode === "stdio") {
-    options.executor = makeExecutor(new StdioTransport(), endpointFor);
+    const stdio = new StdioTransport();
+    stdioLike = stdio;
+    options.executor = makeExecutor(stdio, endpointFor);
   } else if (transportMode === "auto") {
     const composite = new CompositeTransport();
+    stdioLike = composite;
     options.executor = makeExecutor(composite, endpointFor);
-    process.on("exit", () => composite.close()); // reap stdio children on shutdown
+  }
+  if (stdioLike) {
+    const reap = stdioLike;
+    process.on("exit", () => reap.closeAllSync());
+    // `exit` does not fire for SIGINT/SIGTERM unless handled, so reap on those
+    // too and re-raise to keep the conventional exit status.
+    for (const sig of ["SIGINT", "SIGTERM"] as const) {
+      process.on(sig, () => {
+        reap.closeAllSync();
+        process.kill(process.pid, sig);
+      });
+    }
   }
   const gateway = new Gateway(db, defaultPolicy, options);
   const port = Number(process.env.PORT ?? 8084);
-  createServer(buildHandler(db, gateway)).listen(port, () =>
-    console.log(`mcp-security-gateway listening on :${port}`),
+  // Bind loopback unless an operator explicitly opts into an interface. The
+  // /admin/* surface can spawn processes via stdio endpoints, so defaulting to
+  // all-interfaces would expose unauthenticated process execution to the LAN.
+  // Set HOST=0.0.0.0 deliberately (with ADMIN_TOKEN) to expose it.
+  const host = process.env.HOST ?? "127.0.0.1";
+  const adminToken = process.env.ADMIN_TOKEN ?? "";
+  if (adminToken === "" && host !== "127.0.0.1" && host !== "localhost") {
+    console.error(
+      "refusing to start: HOST is not loopback and ADMIN_TOKEN is unset. " +
+        "Set ADMIN_TOKEN before exposing this gateway beyond localhost.",
+    );
+    process.exit(1);
+  }
+  createServer(buildHandler(db, gateway, adminToken || undefined)).listen(port, host, () =>
+    console.log(`mcp-security-gateway listening on ${host}:${port}${adminToken ? " (admin auth on)" : ""}`),
   );
 }
