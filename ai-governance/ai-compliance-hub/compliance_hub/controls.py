@@ -93,7 +93,7 @@ DEFAULT_CONTROLS: list[dict[str, Any]] = [
             "procurement and HR policies."
         ),
         "mappings": {
-            "EU_AI_ACT": ["Article 4", "Article 8"],
+            "EU_AI_ACT": ["Article 17", "Article 8"],
             "NIST_AI_RMF": ["GOVERN-1.1", "GOVERN-2.1"],
             "ISO_42001": ["A.2.2", "A.2.3", "Clause 5.2"],
             "SOC2_AI": ["CC1.3"],
@@ -123,7 +123,13 @@ DEFAULT_CONTROLS: list[dict[str, Any]] = [
         "mappings": {
             "EU_AI_ACT": ["Article 16", "Article 26"],
             "NIST_AI_RMF": ["GOVERN-2.1", "GOVERN-3.2"],
-            "ISO_42001": ["A.3.2", "A.3.4"],
+            # A.3.2 is the Annex A control for AI roles and responsibilities.
+            # Top-management responsibility is an ISO 42001 Clause 5 (Leadership)
+            # management-system duty, not an Annex A control - an earlier draft
+            # here cited a non-existent "A.3.4" for it. The Clause 5 reference is
+            # deliberately omitted until it is verified and registered; see
+            # NEXT_STEPS.md.
+            "ISO_42001": ["A.3.2"],
             "SOC2_AI": ["CC1.4"],
         },
     },
@@ -162,10 +168,13 @@ DEFAULT_CONTROLS: list[dict[str, Any]] = [
         "description": (
             "Provide a confidential, non-retaliatory channel for staff, contractors, "
             "users and external parties to raise concerns about how AI is developed, "
-            "provided or used, with defined investigation and escalation steps."
+            "provided or used, with defined investigation and escalation steps. "
+            "Art 87 imports the EU Whistleblower Directive (2019/1937) protection for "
+            "reporters of infringements; Art 85 is the separate right of any affected "
+            "person to lodge a complaint with a market surveillance authority."
         ),
         "mappings": {
-            "EU_AI_ACT": ["Article 85"],
+            "EU_AI_ACT": ["Article 87", "Article 85"],
             "NIST_AI_RMF": ["GOVERN-5.1"],
             "ISO_42001": ["A.3.3", "A.8.3"],
         },
@@ -767,7 +776,7 @@ DEFAULT_CONTROLS: list[dict[str, Any]] = [
             "under supervisory oversight before wider deployment."
         ),
         "mappings": {
-            "EU_AI_ACT": ["Article 75"],
+            "EU_AI_ACT": ["Article 57", "Article 58"],
             "ISO_42001": ["Clause 8.1"],
         },
     },

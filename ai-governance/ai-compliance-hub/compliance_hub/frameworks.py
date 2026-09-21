@@ -37,6 +37,31 @@ numbering. Notably: serious-incident reporting is **Article 73** (not 61/62)
 and post-market monitoring is **Article 72**. Anything derived from pre-2024
 drafts, blog posts or older GRC exports may still carry the old numbers.
 Treat the OJ-published numbers - the ones registered here - as authoritative.
+
+Provenance (so the "verified" claim is auditable)
+------------------------------------------------
+Registry contents were checked against these sources on **2026-09-20**:
+
+* EU AI Act articles + titles: European Commission **AI Act Service Desk**
+  article index (https://ai-act-service-desk.ec.europa.eu/en/ai-act) and
+  https://artificialintelligenceact.eu, cross-checked against EUR-Lex
+  Regulation (EU) 2024/1689 (https://eur-lex.europa.eu/eli/reg/2024/1689/oj).
+* ISO/IEC 42001:2023 Annex A control IDs and titles: multiple independent
+  full 38-control enumerations (isms.online, mindsetcyber, riskprofs,
+  nemko digital). The per-objective counts asserted in
+  ``tests/test_frameworks.py`` are the arithmetic proof of that enumeration
+  (3+2+5+4+9+5+4+3+3 = 38).
+* NIST AI RMF 1.0 function/category structure: NIST AI RMF 1.0 and the
+  NIST AI RMF -> ISO/IEC 42001 crosswalk (airc.nist.gov).
+* OWASP Top 10 for LLM Applications: owasp.org LLM Top 10 (2025).
+* SOC 2 Trust Services Criteria families: AICPA TSC family numbering.
+
+Those sources are **not** vendored into this repository, and the standards move.
+``tests/test_frameworks.py::RegistryAnchorTests`` pins the load-bearing facts so
+a stale entry fails the build; re-verify against the primary sources and update
+BOTH the registry and the anchors when a framework is amended. ISO 42001 is a
+paid standard - the Annex A titles here are from public secondary enumerations,
+so confirm against your copy of the standard before relying on them for an audit.
 """
 from __future__ import annotations
 
@@ -102,7 +127,10 @@ EU_AI_ACT_ARTICLES: dict[str, str] = {
     "Article 56": "Codes of practice",
     "Article 72": "Post-market monitoring",
     "Article 73": "Reporting of serious incidents",
-    "Article 75": "AI regulatory sandboxes",
+    "Article 57": "AI regulatory sandboxes",
+    "Article 58": "Detailed arrangements for, and functioning of, AI regulatory sandboxes",
+    "Article 75": "Mutual assistance, market surveillance and control of general-purpose AI systems",
+    "Article 87": "Reporting of infringements and protection of reporting persons",
     "Article 85": "Right to lodge a complaint with a market surveillance authority",
     "Article 86": "Right to explanation of individual decision-making",
     "Article 99": "Penalties",
@@ -113,8 +141,16 @@ EU_AI_ACT_ARTICLES: dict[str, str] = {
 # Citations that look plausible but are WRONG, kept so the validator can give a
 # specific, actionable error instead of a generic "unknown reference".
 EU_AI_ACT_KNOWN_BAD: dict[str, str] = {
-    "Article 61": "pre-OJ draft numbering; serious-incident reporting is Article 73",
-    "Article 62": "pre-OJ draft numbering; serious-incident reporting is Article 73",
+    "Article 61": "pre-OJ draft numbering; serious-incident reporting is Article 73 "
+    "(Art 61 as published is informed consent to real-world testing)",
+    "Article 62": "pre-OJ draft numbering; serious-incident reporting is Article 73 "
+    "(Art 62 as published is measures for providers and deployers, in particular SMEs)",
+    # Art 75 IS a real article but it is market surveillance/mutual assistance,
+    # not sandboxes. Registered as known-bad *for the sandbox use* because this
+    # exact mistake shipped once: a citation validator that silently accepted it
+    # is worse than no validator.
+    "Article 75 for sandboxes": "Article 75 is mutual assistance / market surveillance "
+    "of general-purpose AI systems; AI regulatory sandboxes are Article 57 (and Art 58)",
 }
 
 # --------------------------------------------------------------------------
@@ -127,7 +163,6 @@ ISO_42001_ANNEX_A: dict[str, str] = {
     "A.2.4": "Review of the AI policy",
     "A.3.2": "AI roles and responsibilities",
     "A.3.3": "Reporting of concerns",
-    "A.3.4": "Responsibilities of top management",
     "A.4.2": "Resource documentation",
     "A.4.3": "Data resources",
     "A.4.4": "Tooling resources",
@@ -186,6 +221,8 @@ ISO_42001_KNOWN_BAD: dict[str, str] = {
     "A.9.5": "Annex A objective A.9 ends at A.9.4 (intended use)",
     "A.11.2": "Annex A ends at objective A.10",
     "A.1.1": "Annex A starts at objective A.2 (policies related to AI)",
+    "A.3.4": "Annex A objective A.3 has only A.3.2 and A.3.3; top-management "
+    "responsibility is a management-system clause, not an Annex A control",
 }
 
 # --------------------------------------------------------------------------
@@ -343,11 +380,37 @@ def validate_mapping(framework: str, reference: str) -> None:
     _VALIDATORS[framework](reference)
 
 
-def validate_mappings(mappings: dict[str, Iterable[str]]) -> list[str]:
-    """Validate a whole mapping dict; return a list of error strings (empty = ok)."""
+def validate_mappings(mappings: Any) -> list[str]:
+    """Validate a whole mapping dict; return a list of error strings (empty = ok).
+
+    Tolerates malformed input instead of raising: this is called on
+    untrusted HTTP request bodies, where ``mappings`` may arrive as a list,
+    string or null. A non-mapping (or a mapping whose values are not iterable
+    strings) yields a descriptive error rather than an AttributeError, so the
+    API returns 400 instead of 500.
+    """
     errors: list[str] = []
-    for framework, refs in (mappings or {}).items():
+    if mappings is None:
+        return errors
+    if not isinstance(mappings, dict):
+        return [
+            f"mappings must be an object of framework -> list of references, "
+            f"got {type(mappings).__name__}"
+        ]
+    for framework, refs in mappings.items():
+        if not isinstance(framework, str):
+            errors.append(f"framework key must be a string, got {type(framework).__name__}")
+            continue
+        if isinstance(refs, str) or not isinstance(refs, Iterable):
+            errors.append(
+                f"{framework}: references must be a list of strings, "
+                f"got {type(refs).__name__}"
+            )
+            continue
         for ref in refs:
+            if not isinstance(ref, str):
+                errors.append(f"{framework}: reference must be a string, got {type(ref).__name__}")
+                continue
             try:
                 validate_mapping(framework, ref)
             except CitationError as exc:

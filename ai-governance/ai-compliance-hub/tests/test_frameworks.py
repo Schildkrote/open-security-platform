@@ -207,5 +207,186 @@ class LibraryCoverageTests(unittest.TestCase):
         self.assertEqual(list(gaps), [frameworks.EU_AI_ACT])
 
 
+class RegistryAnchorTests(unittest.TestCase):
+    """Non-circular anchors on the registry ITSELF.
+
+    The library-vs-registry tests above are circular: they pass with an
+    incorrect registry (all 44 passed while Article 75 was mis-titled as
+    sandboxes and Annex A carried an invented A.3.4). These assertions pin
+    facts verified against the OJ-published Regulation (EU) 2024/1689 (EU AI
+    Act Service Desk / artificialintelligenceact.eu) and ISO/IEC 42001:2023
+    Annex A enumerations, so a wrong registry entry fails the build even though
+    every control still 'validates' against it.
+
+    If a framework is amended, update BOTH these anchors and the registry, and
+    re-verify against the primary source - do not edit one to silence the other.
+    """
+
+    # --- EU AI Act: the specific errors that shipped once -----------------
+    def test_article_75_is_market_surveillance_not_sandboxes(self):
+        title = frameworks.EU_AI_ACT_ARTICLES["Article 75"].lower()
+        self.assertIn("mutual assistance", title)
+        self.assertNotIn("sandbox", title)
+
+    def test_sandboxes_are_articles_57_and_58(self):
+        self.assertIn("sandbox", frameworks.EU_AI_ACT_ARTICLES["Article 57"].lower())
+        self.assertIn("sandbox", frameworks.EU_AI_ACT_ARTICLES["Article 58"].lower())
+
+    def test_incident_reporting_is_73_and_post_market_is_72(self):
+        self.assertIn(
+            "serious incident", frameworks.EU_AI_ACT_ARTICLES["Article 73"].lower()
+        )
+        self.assertIn(
+            "post-market", frameworks.EU_AI_ACT_ARTICLES["Article 72"].lower()
+        )
+
+    def test_whistleblower_protection_is_87_and_complaint_right_is_85(self):
+        self.assertIn(
+            "reporting persons", frameworks.EU_AI_ACT_ARTICLES["Article 87"].lower()
+        )
+        self.assertIn(
+            "complaint", frameworks.EU_AI_ACT_ARTICLES["Article 85"].lower()
+        )
+
+    def test_mis_titled_75_is_registered_as_known_bad_for_sandbox_use(self):
+        # The exact mistake that shipped once must be caught with guidance.
+        self.assertIn("Article 75 for sandboxes", frameworks.EU_AI_ACT_KNOWN_BAD)
+        with self.assertRaises(frameworks.CitationError) as ctx:
+            frameworks.validate_eu_ai_act("Article 75 for sandboxes")
+        self.assertIn("Article 57", str(ctx.exception))
+
+    # --- ISO/IEC 42001: structural invariants ----------------------------
+    def test_annex_a_has_exactly_38_controls(self):
+        self.assertEqual(len(frameworks.ISO_42001_ANNEX_A), 38)
+
+    def test_annex_a_objective_control_counts(self):
+        # Verified against multiple independent full Annex A enumerations:
+        # A.2=3, A.3=2, A.4=5, A.5=4, A.6=9, A.7=5, A.8=4, A.9=3, A.10=3 = 38.
+        counts: dict[str, int] = {}
+        for ref in frameworks.ISO_42001_ANNEX_A:
+            objective = ref.split(".")[0] + "." + ref.split(".")[1]
+            counts[objective] = counts.get(objective, 0) + 1
+        self.assertEqual(
+            counts,
+            {
+                "A.2": 3, "A.3": 2, "A.4": 5, "A.5": 4, "A.6": 9,
+                "A.7": 5, "A.8": 4, "A.9": 3, "A.10": 3,
+            },
+        )
+
+    def test_objective_a3_stops_at_a3_3(self):
+        # A.3.4 was invented once and slipped past the circular tests.
+        self.assertIn("A.3.3", frameworks.ISO_42001_ANNEX_A)
+        self.assertNotIn("A.3.4", frameworks.ISO_42001_ANNEX_A)
+
+    def test_no_annex_a_control_exceeds_its_objective_bound(self):
+        """Generic guard against the A.7.7 / A.8.6 error class: no control may
+        exceed the highest known leaf in its objective. A.6 is nested
+        (A.6.1.x, A.6.2.x); all other objectives are single-level."""
+        single = {
+            "A.2": (2, 4), "A.3": (2, 3), "A.4": (2, 6), "A.5": (2, 5),
+            "A.7": (2, 6), "A.8": (2, 5), "A.9": (2, 4), "A.10": (2, 4),
+        }
+        nested = {"A.6": {1: (2, 3), 2: (2, 8)}}
+        for ref in frameworks.ISO_42001_ANNEX_A:
+            parts = ref.split(".")
+            objective = ".".join(parts[:2])
+            self.assertTrue(
+                objective in single or objective in nested,
+                f"{ref}: unknown objective {objective}",
+            )
+            if objective in single:
+                self.assertEqual(len(parts), 3, f"{ref}: expected A.x.y form")
+                lo, hi = single[objective]
+                self.assertTrue(
+                    lo <= int(parts[2]) <= hi,
+                    f"{ref} outside the known leaf range {lo}-{hi} for {objective}",
+                )
+            else:
+                self.assertEqual(len(parts), 4, f"{ref}: expected A.6.g.y form")
+                group, lo_hi = int(parts[2]), nested[objective]
+                self.assertIn(group, lo_hi, f"{ref}: unknown A.6 subgroup {group}")
+                lo, hi = lo_hi[group]
+                self.assertTrue(
+                    lo <= int(parts[3]) <= hi,
+                    f"{ref} outside the known leaf range {lo}-{hi} for A.6.{group}",
+                )
+
+    def test_every_annex_a_entry_looks_like_a_control_id(self):
+        import re as _re
+        pat = _re.compile(r"^A\.(?:[2-9]|10)\.\d+(?:\.\d+)?$")
+        for ref in frameworks.ISO_42001_ANNEX_A:
+            self.assertRegex(ref, pat)
+
+    def test_a3_4_is_registered_as_known_bad(self):
+        self.assertIn("A.3.4", frameworks.ISO_42001_KNOWN_BAD)
+
+    # --- NIST AI RMF -----------------------------------------------------
+    def test_nist_function_category_bounds(self):
+        self.assertEqual(
+            frameworks.NIST_AI_RMF_CATEGORY_BOUNDS,
+            {"GOVERN": 6, "MAP": 5, "MEASURE": 4, "MANAGE": 4},
+        )
+
+    # --- registry hygiene ------------------------------------------------
+    def test_known_bad_entries_are_not_also_registered_as_valid(self):
+        """A citation must not appear in both the valid registry and known-bad
+        under the same key - that would make the validator self-contradictory.
+        (Note: 'Article 75 for sandboxes' is a distinct guidance key, not a
+        bare article reference, so it does not collide with 'Article 75'.)"""
+        for bad in frameworks.EU_AI_ACT_KNOWN_BAD:
+            self.assertNotIn(bad, frameworks.EU_AI_ACT_ARTICLES)
+        for bad in frameworks.ISO_42001_KNOWN_BAD:
+            self.assertNotIn(bad, frameworks.ISO_42001_ANNEX_A)
+            self.assertNotIn(bad, frameworks.ISO_42001_CLAUSES)
+
+    def test_no_duplicate_or_empty_titles_in_registry(self):
+        for table in (
+            frameworks.EU_AI_ACT_ARTICLES,
+            frameworks.ISO_42001_ANNEX_A,
+            frameworks.ISO_42001_CLAUSES,
+            frameworks.OWASP_LLM_TOP10_IDS,
+        ):
+            for ref, title in table.items():
+                self.assertTrue(ref.strip(), "empty reference key")
+                self.assertTrue(title.strip(), f"empty title for {ref}")
+
+
+class MalformedMappingsTests(unittest.TestCase):
+    """validate_mappings runs on untrusted HTTP bodies: malformed input must
+    produce error strings (-> HTTP 400), never an exception (-> HTTP 500)."""
+
+    def test_non_dict_mappings_returns_error_not_raises(self):
+        for bad in (["not", "a", "dict"], "a string", 42, 3.5, True):
+            errors = frameworks.validate_mappings(bad)
+            self.assertEqual(len(errors), 1, f"expected 1 error for {bad!r}")
+            self.assertIn("mappings must be an object", errors[0])
+
+    def test_none_and_empty_are_fine(self):
+        self.assertEqual(frameworks.validate_mappings(None), [])
+        self.assertEqual(frameworks.validate_mappings({}), [])
+
+    def test_non_list_refs_returns_error_not_raises(self):
+        errors = frameworks.validate_mappings({"EU_AI_ACT": "Article 9"})
+        self.assertEqual(len(errors), 1)
+        self.assertIn("references must be a list", errors[0])
+
+    def test_non_string_ref_returns_error_not_raises(self):
+        errors = frameworks.validate_mappings({"EU_AI_ACT": [9, None]})
+        self.assertEqual(len(errors), 2)
+        self.assertTrue(all("must be a string" in e for e in errors))
+
+    def test_non_string_framework_key_returns_error_not_raises(self):
+        errors = frameworks.validate_mappings({9: ["Article 9"]})
+        self.assertEqual(len(errors), 1)
+        self.assertIn("framework key must be a string", errors[0])
+
+    def test_mixed_valid_and_malformed(self):
+        errors = frameworks.validate_mappings(
+            {"EU_AI_ACT": ["Article 9", 7], "ISO_42001": "A.7.4"}
+        )
+        self.assertEqual(len(errors), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

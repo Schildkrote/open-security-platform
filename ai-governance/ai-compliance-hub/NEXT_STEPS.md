@@ -29,6 +29,35 @@
     and `A.8.6` (A.7 ends at A.7.6, A.8 at A.8.5), plus `A.8.2` for risk
     assessment (A.8.2 is "information for users"). All corrected and now
     guarded by regression tests.
+  - **An independent review then caught three errors in the NEW registry
+    itself** (2026-09-20), which is the important lesson: library-vs-registry
+    tests are *circular* and passed while the registry was wrong. Corrected:
+    (i) `Article 75` was mis-titled "AI regulatory sandboxes" — in the
+    OJ-published Act Art 75 is *mutual assistance, market surveillance and
+    control of GPAI systems*; sandboxes are **Articles 57/58**. The validator
+    was actively rejecting the correct citation. (ii) An invented `A.3.4`
+    "Responsibilities of top management" made Annex A 39 entries, not 38 —
+    a registry built to catch invented controls contained one. (iii)
+    "Reporting of AI Concerns" cited `Article 85` (an affected person's right
+    to complain) where **Article 87** (reporting of infringements / protection
+    of reporting persons, importing Directive (EU) 2019/1937) is correct; both
+    are now cited since the control covers internal channels and the external
+    complaint route. Also hardened: `validate_mappings` on a non-dict input
+    raised `AttributeError` (HTTP 500) instead of returning errors (HTTP 400).
+    `RegistryAnchorTests` now pins externally verified registry facts so the
+    circularity cannot hide a wrong entry again.
+  - "AI Policy" now cites `Article 17` (QMS incl. documented compliance
+    strategy) instead of `Article 4` (AI literacy — a staff-competence duty,
+    not a policy artifact); literacy has its own control. Still weak and worth
+    revisiting: "AI Supply Chain" → `Article 53` (GPAI provider obligations).
+- **Remaining registry work:** ISO 42001 Clause 5 (Leadership / top-management
+  responsibility) is not registered, so "AI Roles, Responsibilities and
+  Accountability" cites only `A.3.2` — register the Clause 5 references after
+  verifying them against the standard. Add EU AI Act Arts 59-63 (real-world
+  testing / informed consent / SME measures), Arts 74-81 (market surveillance
+  procedures), Arts 95-97 (codes of practice/conduct, confidentiality), and
+  Annex I (harmonised standards). Consider allow-listing full NIST AI RMF
+  subcategory IDs rather than shape-checking only.
 - **Conformity assessment** templates for high-risk systems. *Partially
   covered:* a "Conformity Assessment and CE Marking" control now maps Arts
   43/47/48/49, but there is still no assessment *workflow* (questionnaire,
@@ -39,11 +68,6 @@
   registry is now a good substrate for it: a new article must be registered with
   a title before any control can cite it, so "which controls cite Article X" is
   queryable and diffable across releases.
-- Remaining citation gaps to close: EU AI Act Arts 76-78 (market surveillance),
-  Art 95-97 (codes of conduct/confidentiality), Annex I harmonised standards;
-  ISO 42001 A.6.1.1 and A.6.2.1 (not in Annex A numbering used here — verify
-  against the standard before adding); full NIST AI RMF subcategory IDs
-  (currently shape-validated only, not allow-listed).
 
 ## Risk & governance
 - **AI DPIA / impact assessment** guided questionnaires.

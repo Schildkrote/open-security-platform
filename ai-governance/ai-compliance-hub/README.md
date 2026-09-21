@@ -75,7 +75,7 @@ references are legal:
 
 | Framework | Validation | Scope registered |
 |---|---|---|
-| `EU_AI_ACT` | explicit allow-list + titles | 36 articles/annexes, OJ-published numbering (Reg. (EU) 2024/1689) |
+| `EU_AI_ACT` | explicit allow-list + titles | 39 articles/annexes, OJ-published numbering (Reg. (EU) 2024/1689) |
 | `ISO_42001` | explicit allow-list + titles | 38 Annex A controls (A.2–A.10) + 12 clauses |
 | `NIST_AI_RMF` | shape + category bounds | GOVERN 1–6, MAP 1–5, MEASURE 1–4, MANAGE 1–4 |
 | `SOC2_AI` | shape + family bounds | CC1–CC9, A1, PI1, C1, P1–P8 |
@@ -96,6 +96,11 @@ CitationError: EU_AI_ACT 'Article 62' is a known-bad citation:
     GRC exports still circulate Article 61/62. Treat the OJ numbers — the ones
     registered here — as authoritative.
 
+See the module docstring in `compliance_hub/frameworks.py` for the **provenance**
+of every registry entry (sources + the date they were checked), and note that
+ISO/IEC 42001 is a paid standard — its Annex A titles here come from public
+secondary enumerations, so confirm against your own copy before an audit.
+
 Validation is **not** enforced inside `controls.add_control`, which must stay
 permissive so third-party OSCAL catalogs can be imported. It is enforced (a) on
 the shipped library by `tests/test_frameworks.py` and (b) at the
@@ -103,16 +108,25 @@ the shipped library by `tests/test_frameworks.py` and (b) at the
 
 ### Library scope — honest
 
-46 controls across 8 families, citing 146 distinct framework references. This is
+46 controls across 8 families, citing 147 distinct framework references. This is
 a *working library* covering what an AI team is most often asked about, **not a
 complete transcription of any framework**. Use `GET /controls/gaps` to see what
 is unmapped rather than assuming coverage. Remaining gaps are tracked in
 `NEXT_STEPS.md`.
 
+The registry itself is pinned by **non-circular** anchor tests
+(`RegistryAnchorTests`): validating the library against the registry alone would
+pass even with a wrong registry — it did exactly that once, when `Article 75`
+was mis-titled as sandboxes and a non-existent `A.3.4` was registered. The
+anchors assert externally verified facts about the registry (Art 75 is market
+surveillance, sandboxes are Arts 57/58, Annex A has exactly 38 controls with
+per-objective counts 3+2+5+4+9+5+4+3+3, A.3 stops at A.3.3), so a stale or
+invented entry fails the build.
+
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests    # 44 tests
+python3 -m unittest discover -s tests    # 64 tests
 ```
 
 ## License
