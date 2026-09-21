@@ -196,3 +196,131 @@ test("Gateway pipeline: policy/poisoning/allowlist run before any stdio spawn", 
   const chain = db.prepare(`SELECT COUNT(*) AS n FROM audit_log`).get() as { n: number };
   assert.ok(chain.n >= 4);
 });
+
+// --- Shutdown / resource-safety tests -------------------------------------
+// These cover behaviour added in response to the security review: SIGTERM ->
+// SIGKILL escalation in close(), the synchronous reap used by process-exit
+// hooks, and the unterminated-frame cap. Each needs a purpose-built fixture
+// child because the well-behaved fake-mcp-child exits on stdin EOF and would
+// never exercise the escalation path.
+
+const stubbornFixture = `${import.meta.dirname}/fixtures/stubborn-mcp-child.ts`;
+const stubbornEndpoint = `stdio:${JSON.stringify({
+  command: process.execPath,
+  args: ["--experimental-strip-types", "--no-warnings", stubbornFixture],
+})}`;
+
+const floodFixture = `${import.meta.dirname}/fixtures/flood-mcp-child.ts`;
+const floodEndpoint = `stdio:${JSON.stringify({
+  command: process.execPath,
+  args: ["--experimental-strip-types", "--no-warnings", floodFixture],
+})}`;
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0); // signal 0: existence check, does not kill
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Capture the child's pid from the notification the stubborn fixture emits on
+// startup ("pid:NNNN"), which the transport forwards via onNotification.
+function pidFromNotifications(transport: StdioTransport, endpoint: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    let captured: number | null = null;
+    (transport as unknown as { opts: { onNotification?: unknown } }).opts.onNotification = (
+      _ep: string,
+      n: JsonRpcNotification,
+    ) => {
+      const text = String((n.params as { text?: unknown })?.text ?? "");
+      const m = /^pid:(\d+)$/.exec(text);
+      if (m) {
+        captured = Number(m[1]);
+        resolve(captured);
+      }
+    };
+    // Drive a real call so the child spawns and emits its startup notification.
+    transport.callTool(endpoint, "ping", {}).catch(() => undefined);
+    setTimeout(() => reject(new Error("no pid notification captured")), 5000).unref();
+  });
+}
+
+test("close() escalates SIGTERM to SIGKILL for a child that ignores SIGTERM", async (t) => {
+  // Short grace period so the test does not have to wait the 2s default.
+  const transport = new StdioTransport({ killGraceMs: 150 });
+  t.after(() => transport.closeAllSync());
+
+  const pid = await pidFromNotifications(transport, stubbornEndpoint);
+  assert.ok(alive(pid), "stubborn child should be running before close");
+
+  transport.closeAll(); // graceful: SIGTERM, then SIGKILL after killGraceMs
+
+  // The child ignores SIGTERM, so it must still be alive immediately after.
+  assert.ok(alive(pid), "child ignores SIGTERM; should survive the first moment");
+
+  // After the grace period the escalation must have killed it.
+  let killed = false;
+  for (let i = 0; i < 40 && !killed; i += 1) {
+    await sleep(50);
+    killed = !alive(pid);
+  }
+  assert.ok(killed, "close() must escalate to SIGKILL when SIGTERM is ignored");
+});
+
+test("closeAllSync() kills a SIGTERM-ignoring child immediately", async (t) => {
+  const transport = new StdioTransport({ killGraceMs: 60_000 }); // would never fire
+  t.after(() => transport.closeAllSync());
+
+  const pid = await pidFromNotifications(transport, stubbornEndpoint);
+  assert.ok(alive(pid), "child should be running before closeAllSync");
+
+  transport.closeAllSync(); // synchronous path used by process-exit hooks
+
+  let killed = false;
+  for (let i = 0; i < 40 && !killed; i += 1) {
+    await sleep(50);
+    killed = !alive(pid);
+  }
+  assert.ok(
+    killed,
+    "closeAllSync must SIGKILL outright: timers cannot run during process exit, " +
+      "so a graceful path here would orphan the child",
+  );
+});
+
+test("unterminated stdout frame is capped instead of buffering without limit", async (t) => {
+  const transport = new StdioTransport();
+  t.after(() => transport.closeAllSync());
+
+  // The flood child writes 2 MiB with no newline; the 1 MiB frame cap must
+  // fail the session rather than grow gateway memory unboundedly.
+  await assert.rejects(
+    transport.callTool(floodEndpoint, "flood", {}),
+    /frame cap|closed|exited|not running/,
+  );
+
+  // The session must be dead afterwards, and a follow-up call must not hang or
+  // silently succeed on a dead child.
+  await assert.rejects(transport.callTool(floodEndpoint, "flood", {}));
+});
+
+test("in-flight requests are rejected when the transport is closed", async (t) => {
+  const transport = new StdioTransport({ killGraceMs: 50 });
+  t.after(() => transport.closeAllSync());
+
+  // The `hang` tool deliberately never replies, so this call is genuinely in
+  // flight when we close. Using a normal tool here would be a vacuous test: the
+  // child replies in well under the wait below, the promise resolves, and
+  // assert.rejects fails with "Missing expected rejection" for a reason that has
+  // nothing to do with close() semantics.
+  const pending = transport.callTool(stubbornEndpoint, "hang", {});
+  await sleep(400); // let the child spawn, initialize, and leave the call pending
+  transport.closeAllSync();
+  await assert.rejects(pending, /transport closed|exited|not running/);
+});
