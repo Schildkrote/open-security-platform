@@ -25,6 +25,19 @@ func (findingRedactor) Redact(text string) (string, []string) {
 
 var _ redactor.Redactor = findingRedactor{}
 
+// noFindingRedactor finds nothing in any input. It exists because BL-11 made the
+// request path a TOTAL sweep (keys included), which means findingRedactor - which
+// flags every non-empty string - can no longer express "a clean request": under a
+// total sweep ANY non-empty object has at least one string (a key) for it to flag.
+// The (nil, nil, nil) contract still needs a fixture that genuinely finds nothing.
+type noFindingRedactor struct{}
+
+func (noFindingRedactor) Redact(text string) (string, []string) {
+	return text, nil
+}
+
+var _ redactor.Redactor = noFindingRedactor{}
+
 const okJSONResponse = `{"id":"x","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"total_tokens":2}}`
 
 // RC#2 branch: sensitive content was found but json.Marshal of the parsed request
@@ -66,11 +79,21 @@ func TestRedactionMarshalErrorFailsClosed(t *testing.T) {
 // Nothing sensitive -> no rewrite, no error. This is what distinguishes the
 // (nil, nil, nil) return from the failure case above; collapsing the two is how
 // the original bug forwarded raw PII under a "redacted" audit line.
+// Nothing sensitive -> no rewrite, no error. This is what distinguishes the
+// (nil, nil, nil) return from the failure case above; collapsing the two is how
+// the original bug forwarded raw PII under a "redacted" audit line.
+//
+// NOTE on the fixture: this used to pass findingRedactor with an "empty content"
+// body. That only looked clean because the OLD request walker visited nothing but
+// messages[].content and parts[].text - it never saw the surrounding keys. Under
+// the total sweep (BL-11) findingRedactor flags every key too, so that fixture
+// would report findings and the test would assert the walker's narrowness rather
+// than the contract. noFindingRedactor expresses the contract directly.
 func TestRedactionNoFindingsIsNotAnError(t *testing.T) {
 	clean := map[string]any{
 		"messages": []any{map[string]any{"role": "user", "content": ""}},
 	}
-	body, kinds, err := redactRequestContent(clean, findingRedactor{})
+	body, kinds, err := redactRequestContent(clean, noFindingRedactor{})
 	t.Logf("body=%v kinds=%v err=%v", body, kinds, err)
 	if err != nil {
 		t.Errorf("nothing sensitive must not be reported as a redaction failure: %v", err)

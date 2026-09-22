@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -128,10 +130,19 @@ func TestSweepReachesEveryStringFieldNotJustChoices(t *testing.T) {
 // is a documented decision about base64 payloads, not an oversight that lets a
 // field be exempted by accident.
 func TestSweepSkipsOpaqueBinaryKeys(t *testing.T) {
-	// A base64 key whose value happens to contain the canary. Redacting inside
-	// base64 would corrupt the payload into something the client cannot decode.
+	// A REAL base64 payload under b64_json. The exemption exists so genuine image
+	// or audio data is not mangled into something the client cannot decode, and
+	// that concern is legitimate and preserved here.
+	//
+	// BL-9 note: the earlier version of this test put the raw PII canary under
+	// b64_json and asserted it survived. That assertion WAS the vulnerability - the
+	// exemption was keyed by NAME with no validation, so {"b64_json":"<email>"} was
+	// served verbatim at 200 and 500. The canary is not valid base64, so it no
+	// longer qualifies for the skip; TestOpaqueExemptionRequiresRealBase64 below
+	// pins that.
+	b64 := base64.StdEncoding.EncodeToString([]byte("fake-png-bytes-not-text"))
 	body := `{"choices":[{"message":{"content":[` +
-		`{"type":"image_url","b64_json":"` + piiMarker + `"}]}}]}`
+		`{"type":"image_url","b64_json":"` + b64 + `"}]}}]}`
 	up := serveStatusAndBody(t, http.StatusOK, body)
 
 	var buf bytes.Buffer
@@ -148,12 +159,117 @@ func TestSweepSkipsOpaqueBinaryKeys(t *testing.T) {
 	client := rr.Body.String()
 	t.Logf("client=%.240s", client)
 
-	if !strings.Contains(client, piiMarker) {
-		t.Errorf("the opaque b64_json payload was rewritten, which would corrupt an "+
-			"undecodable base64 stream: %s", client)
+	if !strings.Contains(client, b64) {
+		t.Errorf("a genuine base64 payload was rewritten, which would corrupt data "+
+			"the client cannot decode: %s", client)
 	}
 	if !strings.Contains(client, `"type":"image_url"`) {
 		t.Errorf("the surrounding part structure was lost: %s", client)
+	}
+	// BL-9: the skip must leave a diagnostic, and it must leave it in BOTH places.
+	// Asserting merely that "opaque_skipped" appears somewhere in the audit JSON is
+	// a one-sided assertion: the string occurs both as a redaction KIND
+	// ("resp:opaque_skipped" in the redactions array) and as a META field
+	// ("redaction":"opaque_skipped"). A mutation that deleted the kind but kept the
+	// meta - or vice versa - would still pass. Pin each distinctly. This is exactly
+	// how mutation M3 survived the first version of this test.
+	audit := buf.String()
+	if !strings.Contains(audit, `"resp:opaque_skipped"`) {
+		t.Errorf("the opaque skip was not recorded as a redaction KIND, so the trail "+
+			"cannot account for uninspected bytes: %s", audit)
+	}
+	if !strings.Contains(audit, `"redaction":"opaque_skipped"`) {
+		t.Errorf("the opaque skip was not recorded in the event META: %s", audit)
+	}
+}
+
+// BL-9, the actual vulnerability: the exemption must be earned by CONTENT, not
+// granted by key name. A value under b64_json that is not valid base64 cannot be a
+// binary payload, so it must be swept like any other string - at every status,
+// since no security decision reads the upstream status code.
+func TestOpaqueExemptionRequiresRealBase64(t *testing.T) {
+	notBase64 := []string{
+		piiMarker,              // the canary: letters and dashes, not base64
+		"jane.doe@example.com", // plain PII
+		"not base64 at all!!",  // spaces and punctuation
+		base64.StdEncoding.EncodeToString([]byte("ok"))[:3], // truncated mid-padding
+	}
+	for _, status := range []int{http.StatusOK, http.StatusInternalServerError,
+		http.StatusTooManyRequests, http.StatusBadRequest} {
+		for _, val := range notBase64 {
+			name := fmt.Sprintf("status_%d/%s", status, val)
+			t.Run(name, func(t *testing.T) {
+				escaped, _ := json.Marshal(val) // keep the body valid JSON
+				body := `{"id":"x","b64_json":` + string(escaped) + `,"choices":[]}`
+				up := serveStatusAndBody(t, status, body)
+
+				var buf bytes.Buffer
+				gw := newTestGateway(t, nil, &buf)
+				gw.UpstreamURL = up.URL
+				gw.Redactor = shapeRedactor{}
+
+				rr := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+					strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+				req.Header.Set("X-API-Key", longSecretKey)
+				gw.ServeHTTP(rr, req)
+
+				client := rr.Body.String()
+				if strings.Contains(client, piiMarker) && val == piiMarker {
+					t.Errorf("BL-9 LEAK: a non-base64 value under the exempted key was "+
+						"served verbatim at status %d: %s", status, client)
+				}
+				if val == piiMarker && !strings.Contains(buf.String(), "resp:EMAIL") {
+					t.Errorf("the sweep did not report the redaction it performed: %s",
+						buf.String())
+				}
+			})
+		}
+	}
+}
+
+// BL-9, the deeper shape: the exemption must not apply at any depth or to any
+// value TYPE. A non-string under an exempted key cannot be a binary payload at
+// all, and a PII-bearing subtree nested under it must still be swept.
+func TestOpaqueExemptionDoesNotExtendToNestedStructures(t *testing.T) {
+	shapes := map[string]string{
+		"object_under_key": `{"id":"x","b64_json":{"leak":"` + piiMarker + `"}}`,
+		"array_under_key":  `{"id":"x","b64_json":["` + piiMarker + `"]}`,
+		"deep_subtree":     `{"id":"x","b64_json":{"a":{"b":{"c":"` + piiMarker + `"}}}}`,
+		"number_under_key": `{"id":"x","b64_json":12345}`,
+		"null_under_key":   `{"id":"x","b64_json":null}`,
+		"bool_under_key":   `{"id":"x","b64_json":true}`,
+	}
+	for name, body := range shapes {
+		t.Run(name, func(t *testing.T) {
+			up := serveStatusAndBody(t, http.StatusOK, body)
+
+			var buf bytes.Buffer
+			gw := newTestGateway(t, nil, &buf)
+			gw.UpstreamURL = up.URL
+			gw.Redactor = shapeRedactor{}
+
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+				strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+			req.Header.Set("X-API-Key", longSecretKey)
+			gw.ServeHTTP(rr, req)
+
+			client := rr.Body.String()
+			t.Logf("client=%.200s", client)
+			if strings.Contains(client, piiMarker) {
+				t.Errorf("BL-9 LEAK: PII under the exempted key escaped via a %s: %s",
+					name, client)
+			}
+			// Structure must survive for the non-PII cases: a number, null or bool
+			// under b64_json is not a leak and must not be dropped.
+			for _, keep := range []string{"12345", "null", "true"} {
+				if strings.Contains(body, keep) && !strings.Contains(client, keep) {
+					t.Errorf("non-string value %s under the exempted key was destroyed: %s",
+						keep, client)
+				}
+			}
+		})
 	}
 }
 

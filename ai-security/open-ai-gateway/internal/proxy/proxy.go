@@ -4,6 +4,7 @@ package proxy
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -138,12 +140,24 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	model := stringField(parsedReq, "model")
-	content, contentOK := extractContent(parsedReq)
+	// Only contentOK is used now. extractContent remains the SHAPE guard that
+	// fails closed when the message container itself cannot be read; BL-11 moved
+	// the policy view to every string in the body (see Evaluate below), so the
+	// extracted text is no longer what policy reads.
+	_, contentOK := extractContent(parsedReq)
 
 	ev := audit.Event{APIKey: maskKey(apiKey), Model: model}
 
 	// 1. Policy decision.
-	dec := g.Engine.Evaluate(policy.Request{Model: model, Content: content, APIKey: apiKey})
+	//
+	// BL-11: policy now evaluates EVERY string in the request body, not just the
+	// messages[].content that extractContent could read. A ContentRe deny rule that
+	// only saw message content was bypassable by field choice - the reviewer
+	// reproduced {"model":"m","prompt":"say FORBIDDEN please"} passing a rule that
+	// denied "FORBIDDEN", audited as action:"allow". allRequestStrings covers
+	// prompt, metadata, tool descriptions, the user field, data URIs and object
+	// keys, in a deterministic order so decisions are reproducible.
+	dec := g.Engine.Evaluate(policy.Request{Model: model, Content: allRequestStrings(parsedReq), APIKey: apiKey})
 	ev.Action = string(dec.Action)
 	ev.Rule = dec.Rule
 	ev.Reason = dec.Reason
@@ -250,6 +264,17 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 4. Forward upstream.
 	upReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, g.UpstreamURL, bytes.NewReader(body))
 	if err != nil {
+		// BL-13 sibling: same hole as the unreachable-upstream path below. The
+		// reviewer judged this unreachable with a configured URL, which is right
+		// for a well-formed config - but a malformed g.UpstreamURL reaches it, and
+		// a processed-and-failed request that writes no event is a hole in a
+		// tamper-evident trail either way. err.Error() can echo the configured
+		// URL, so the reason is fixed text and the key is masked.
+		ev.Action = "upstream_error"
+		ev.Rule = "upstream-request-invalid"
+		ev.Reason = "upstream request could not be constructed"
+		setMeta(&ev, "upstream", "request_construction_failed")
+		g.log(ev)
 		http.Error(w, "upstream error", http.StatusBadGateway)
 		return
 	}
@@ -259,6 +284,19 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := g.client().Do(upReq)
 	if err != nil {
+		// BL-13: this path wrote NO audit event, so a request that had already
+		// passed policy and rate limiting produced a 502 and an empty trail. For a
+		// product whose selling point is a tamper-evident record, a
+		// processed-and-failed request with zero events is a hole in the trail -
+		// the same class the handler-panic fix closed. Mirror the read-error path
+		// below. The transport error text can contain the upstream URL and DNS
+		// detail, so it is recorded as a fixed reason rather than err.Error(); the
+		// key is masked like every other event.
+		ev.Action = "upstream_error"
+		ev.Rule = "upstream-unreachable"
+		ev.Reason = "upstream connection could not be established"
+		setMeta(&ev, "upstream", "connect_failed")
+		g.log(ev)
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		return
 	}
@@ -382,7 +420,14 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// longer match what upstream sent even when nothing was redacted.
 			// Validator headers describing the upstream body must not be copied.
 			before := respBody
-			redacted, kinds, err := redactResponse(parsed, g.redactor())
+			redacted, kinds, opaqueSkipped, err := redactResponse(parsed, g.redactor())
+			if opaqueSkipped > 0 {
+				// BL-9: an exemption that leaves no diagnostic is indistinguishable
+				// from a silent hole. Record that N positions were skipped as
+				// verified-opaque binary so the trail accounts for every byte.
+				setMeta(&ev, "redaction", "opaque_skipped")
+				setMeta(&ev, "opaque_skipped", opaqueSkipped)
+			}
 
 			// Record the redactions the sweep applied and serve the re-encoded
 			// map. There is no status-code branch here any more, and that is
@@ -424,21 +469,46 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	g.log(ev)
-
 	// Headers listed in the upstream's Connection header are hop-by-hop for this
 	// connection specifically (RFC 9110 7.6.1) and must not be forwarded, even
 	// though their names are not in the static isHopByHop set.
 	connListed := connectionListedHeaders(resp.Header)
 
+	// BL-12: headers are bytes the gateway serves to the client, so the claim
+	// "no branch serves uninspected bytes" was false while header VALUES passed
+	// through verbatim. The reviewer reproduced an upstream 200 carrying
+	// X-Model-Output: <email> reaching the client at every status.
+	//
+	// The scope is deliberate: only NON-STANDARD headers are redacted, and only
+	// when response redaction is enabled. Standard headers are protocol metadata
+	// the client needs to interpret the response - running a PII regex over a Date
+	// or a Cache-Control could break content negotiation for no security gain, and
+	// neither is model output. Custom X-*/provider-specific headers are exactly
+	// where an upstream surfaces model or user data, which is what a PII regex is
+	// for. isNonStandardHeader is a POSITIVE list of names to spare, so an unknown
+	// header falls through to being swept rather than through to being served.
 	for k, vs := range resp.Header {
-		if isHopByHop(k) || connListed[http.CanonicalHeaderKey(k)] {
+		ck := http.CanonicalHeaderKey(k)
+		if isHopByHop(k) || connListed[ck] {
 			continue
 		}
 		for _, v := range vs {
-			w.Header().Add(k, v)
+			out := v
+			if g.RedactResponse && isNonStandardHeader(ck) {
+				cleaned, found := g.redactor().Redact(v)
+				if len(found) > 0 {
+					out = cleaned
+					for _, f := range found {
+						ev.Redactions = append(ev.Redactions, "resp_hdr:"+f)
+					}
+					responseRewritten = true
+				}
+			}
+			w.Header().Add(k, out)
 		}
 	}
+	g.log(ev)
+
 	// Validators describe a specific body. Forwarding upstream's ETag (or
 	// Last-Modified) alongside a rewritten body would let a client cache the
 	// redacted bytes under an identity that maps to the unredacted ones, and
@@ -512,37 +582,103 @@ func connectionListedHeaders(h http.Header) map[string]bool {
 // model output served under a non-2xx label. That attack surface is gone, because
 // no branch serves uninspected bytes any more.
 //
-// Keys in opaqueKeys are skipped: they carry binary payloads that are not natural
-// language, where running a PII regex is both wasteful and liable to mangle the
-// data into something the client cannot decode.
-func redactResponse(parsed map[string]any, r redactor.Redactor) ([]byte, []string, error) {
-	var kinds []string
-	sweepValue(parsed, r, &kinds)
+// Keys in opaqueKeys may be skipped, but only when the VALUE verifies as base64
+// (see isOpaqueBinary), and every skip is counted and returned so the caller can
+// record that content was left uninspected. An exemption is not a hole only if it
+// is validated and logged.
+func redactResponse(parsed map[string]any, r redactor.Redactor) ([]byte, []string, int, error) {
+	c := &sweepCtx{r: r, prefix: "resp"}
+	sweepValue(parsed, c)
 	body, err := marshalMap(parsed)
 	if err != nil {
-		return nil, kinds, err
+		return nil, c.kinds, c.opaqueSkipped, err
 	}
-	return body, kinds, nil
+	return body, c.kinds, c.opaqueSkipped, nil
 }
 
-// opaqueKeys hold non-textual payloads. "b64_json" is base64-encoded image or
-// audio; redacting inside it would corrupt the stream and cannot meaningfully
-// match a PII pattern. Embedding vectors need no entry - they decode to float64,
-// which the sweep ignores.
+// opaqueKeys name fields whose payload is binary rather than natural language,
+// where running a PII regex is both wasteful and liable to mangle data the client
+// cannot decode. Membership is a HINT, not a grant: see isOpaqueBinary.
 var opaqueKeys = map[string]bool{
 	"b64_json": true,
 }
 
-// sweepValue redacts every string in a JSON-decoded value, in place, and appends
-// the kinds it found. Strings are immutable in Go, so containers reassign their
-// children and the function returns the (possibly replaced) value.
+// isOpaqueBinary decides whether a value under an opaqueKeys name may skip the
+// sweep, and it decides by CONTENT rather than by key name.
+//
+// BL-9: the exemption used to fire on the key alone, at any depth, for any value
+// type. That made {"b64_json":"jane.doe@example.com"} - and the same PII under
+// b64_json as an object, an array, or a deep subtree - be served verbatim, with
+// nothing recorded in the audit event. It was a one-entry hand-maintained list of
+// uninspectable positions, i.e. enumeration reintroduced inside the fix for
+// enumeration, which is the exact defect this branch exists to remove.
+//
+// So the skip requires the value to be a string that actually IS base64: it must
+// decode and re-encode to itself. A non-string under b64_json cannot be a binary
+// payload at all, and a string that does not round-trip is not opaque data -
+// either way it gets swept like everything else. All four standard encodings are
+// tried so a genuine image or audio payload using URL-safe or unpadded base64 is
+// not corrupted by over-redaction.
+func isOpaqueBinary(v any) bool {
+	s, ok := v.(string)
+	if !ok || s == "" {
+		return false
+	}
+	for _, enc := range []*base64.Encoding{
+		base64.StdEncoding, base64.RawStdEncoding,
+		base64.URLEncoding, base64.RawURLEncoding,
+	} {
+		raw, err := enc.DecodeString(s)
+		if err != nil {
+			continue
+		}
+		if enc.EncodeToString(raw) == s {
+			return true // round-trips: genuinely opaque binary
+		}
+	}
+	return false
+}
+
+// sweepCtx carries what a total sweep accumulates, so the SAME traversal serves
+// both directions and neither can drift from the other.
+//
+// prefix records which way the bytes were flowing: "resp" for upstream->client
+// and "req" for client->upstream. The audit trail has to be able to tell them
+// apart, because a redaction that never reached the client is not evidence the
+// client was protected, and vice versa.
+type sweepCtx struct {
+	r             redactor.Redactor
+	kinds         []string
+	opaqueSkipped int
+	prefix        string
+}
+
+func (c *sweepCtx) found(kind string) {
+	c.kinds = append(c.kinds, c.prefix+":"+kind)
+}
+
+// sweepValue redacts every string in a JSON-decoded value, in place, and returns
+// the (possibly replaced) value. Strings are immutable in Go, so containers
+// reassign their children.
+//
+// BL-10: object KEYS are swept, not just values. A key is a string in the decoded
+// document and json.Marshal re-emits it verbatim, so a compromised upstream could
+// ship PII as a key ({"jane.doe@example.com":"v"}) and the client would receive it
+// raw. "Every string anywhere in the document" is false for keys unless keys are
+// swept.
+//
+// Renaming happens in a second pass: adding or deleting map entries while ranging
+// over that same map is not safe in Go, so renames are collected and applied after
+// the range completes. Two distinct keys can redact to the SAME string, which
+// would silently drop one entry, so collisions get a numeric suffix and both are
+// preserved.
 //
 // The default branch is a deliberate no-op rather than an error: encoding/json
 // cannot produce a seventh type when decoding into any, so reaching it would mean
 // a future change to how the body is decoded. json.Number is handled explicitly
 // for that reason - it is a string type and a numeric literal cannot carry PII,
 // but letting it fall through to default would leave the assumption unstated.
-func sweepValue(v any, r redactor.Redactor, kinds *[]string) any {
+func sweepValue(v any, c *sweepCtx) any {
 	switch tv := v.(type) {
 	case nil, bool, float64:
 		return v
@@ -550,27 +686,143 @@ func sweepValue(v any, r redactor.Redactor, kinds *[]string) any {
 		// A numeric literal. Not natural language, cannot carry PII.
 		return v
 	case string:
-		cleaned, found := r.Redact(tv)
+		cleaned, found := c.r.Redact(tv)
 		for _, k := range found {
-			*kinds = append(*kinds, "resp:"+k)
+			c.found(k)
 		}
 		return cleaned
 	case []any:
 		for idx, el := range tv {
-			tv[idx] = sweepValue(el, r, kinds)
+			tv[idx] = sweepValue(el, c)
 		}
 		return tv
 	case map[string]any:
+		// Pass 1: sweep values, collect key renames without mutating the map.
+		type rename struct{ from, to string }
+		var renames []rename
 		for k, val := range tv {
-			if opaqueKeys[k] {
+			if opaqueKeys[k] && isOpaqueBinary(val) {
+				// Genuinely opaque binary, verified by CONTENT. Record the skip so
+				// the trail shows something was left uninspected and where - an
+				// exemption that leaves no diagnostic is indistinguishable from a
+				// silent hole (the BL-8/N1 class).
+				c.opaqueSkipped++
+				c.found("opaque_skipped")
 				continue
 			}
-			tv[k] = sweepValue(val, r, kinds)
+			tv[k] = sweepValue(val, c)
+			if ck, found := c.r.Redact(k); len(found) > 0 && ck != k {
+				// Record the kinds for the KEY redaction too. Discarding them here
+				// would make the audit trail claim nothing was redacted while PII
+				// was in fact removed from a key - the reviewer's N1 finding
+				// ("string case discards found kinds") reborn one level up. It is
+				// worse than a telemetry bug: redactRequestContent returns
+				// (nil,nil,nil) when kinds is empty, so a request whose ONLY PII
+				// sat in a key would not be rewritten at all and would be forwarded
+				// to the upstream provider verbatim.
+				for _, f := range found {
+					c.found(f)
+				}
+				renames = append(renames, rename{k, ck})
+			}
+		}
+		// Pass 2: apply renames now that ranging is finished.
+		for _, rn := range renames {
+			val, exists := tv[rn.from]
+			if !exists {
+				continue
+			}
+			to := rn.to
+			// Preserve both entries if two keys redacted to the same string;
+			// silently overwriting would drop data the client asked for.
+			for n := 2; ; n++ {
+				if _, clash := tv[to]; !clash {
+					break
+				}
+				to = rn.to + "_" + strconv.Itoa(n)
+			}
+			delete(tv, rn.from)
+			tv[to] = val
 		}
 		return tv
 	default:
 		return v
 	}
+}
+
+// collectStrings gathers every string in a JSON-decoded value, keys included, in
+// document order. It exists for the policy engine (BL-11): a ContentRe deny rule
+// that only saw messages[].content could be bypassed by putting the forbidden text
+// in ANY other field - prompt, metadata.user_email, tools[].function.description,
+// the top-level user field, an image_url data URI, or an object key. Feeding
+// policy the concatenation of every string means the rule cannot be dodged by
+// field choice, which is the request-side analogue of the response sweep.
+//
+// Keys are included because a key is attacker-chosen text that reaches upstream.
+func collectStrings(v any, out *[]string) {
+	switch tv := v.(type) {
+	case string:
+		*out = append(*out, tv)
+	case []any:
+		for _, el := range tv {
+			collectStrings(el, out)
+		}
+	case map[string]any:
+		keys := make([]string, 0, len(tv))
+		for k := range tv {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys) // deterministic: map iteration order is randomised
+		for _, k := range keys {
+			*out = append(*out, k)
+			collectStrings(tv[k], out)
+		}
+	}
+}
+
+// allRequestStrings returns every string in a request body, joined for policy
+// evaluation. Deterministic ordering matters: policy decisions must be
+// reproducible, and Go randomises map iteration.
+func allRequestStrings(parsed map[string]any) string {
+	var parts []string
+	collectStrings(parsed, &parts)
+	return strings.Join(parts, "\n")
+}
+
+// isNonStandardHeader reports whether a canonical header name is NOT part of the
+// HTTP protocol vocabulary or a well-known provider interop header. BL-12 redacts
+// the values of everything this returns true for.
+//
+// The list is a POSITIVE list of names to SPARE. A negative list of names to
+// redact would be the enumeration mistake this branch exists to remove: any header
+// nobody thought of would fall through unswept. Sparing protocol vocabulary is
+// safe because those values are generated by the HTTP stack, not by a model.
+func isNonStandardHeader(canonical string) bool {
+	switch canonical {
+	case "Content-Type", "Content-Length", "Content-Encoding", "Content-Language",
+		"Content-Range", "Content-Disposition", "Content-Location",
+		"Date", "Server", "Cache-Control", "Pragma", "Expires", "Age",
+		"Vary", "Via", "Warning", "Allow", "Location",
+		"Accept-Ranges", "Retry-After", "Trailer", "Transfer-Encoding",
+		"Last-Modified", "Etag", "If-None-Match", "If-Modified-Since",
+		"Access-Control-Allow-Origin", "Access-Control-Allow-Credentials",
+		"Access-Control-Allow-Headers", "Access-Control-Allow-Methods",
+		"Access-Control-Expose-Headers", "Access-Control-Max-Age",
+		"Strict-Transport-Security", "X-Content-Type-Options",
+		"X-Frame-Options", "X-Xss-Protection", "Referrer-Policy",
+		"X-Request-Id", "X-Correlation-Id", "Request-Id",
+		"X-Amzn-Requestid", "X-Amzn-Trace-Id",
+		"Openai-Organization", "Openai-Processing-Ms", "Openai-Version",
+		"X-Ratelimit-Limit-Requests", "X-Ratelimit-Limit-Tokens",
+		"X-Ratelimit-Remaining-Requests", "X-Ratelimit-Remaining-Tokens",
+		"X-Ratelimit-Reset-Requests", "X-Ratelimit-Reset-Tokens",
+		"Anthropic-Ratelimit-Requests-Limit",
+		"Anthropic-Ratelimit-Requests-Remaining",
+		"Anthropic-Ratelimit-Requests-Reset",
+		"Cf-Ray", "Cf-Cache-Status":
+		return false
+	}
+	return true
 }
 
 // isSuccessfulStatus reports whether a status code denotes success.
@@ -836,50 +1088,39 @@ func extractContent(m map[string]any) (string, bool) {
 // upstream while the audit trail still recorded a redaction. The caller fails
 // closed on it. Unrecognised content shapes never reach here - extractContent has
 // already failed closed on them.
+// redactRequestContent redacts a client request body before it is forwarded
+// upstream, in place, preserving every field the client sent.
+//
+// BL-11: this used to be an ENUMERATED walker - messages[].content strings and
+// parts[].text only - which is precisely the design four review rounds proved
+// insufficient on the response side. The response half was converted to a total
+// sweep and this half was not, so PII in metadata.user_email, prompt,
+// tools[].function.description, the top-level user field, or an image_url data URI
+// was forwarded to the provider verbatim. That leaks in the direction
+// RedactRequest exists to close (client -> upstream), and it also let a ContentRe
+// deny rule be bypassed by field choice.
+//
+// It now runs the same sweepValue traversal as the response path, so the two
+// directions cannot drift apart, and object keys are swept too. Non-string fields
+// are untouched, which is what keeps the request semantically intact: model,
+// stream, temperature, max_tokens, top_p, stop, n, tools, tool_choice and
+// response_format all survive, because the redactor only rewrites strings that
+// match a PII pattern.
+//
+// The (nil, nil, nil) return means "nothing sensitive found" and is deliberately
+// distinct from an error: collapsing the two is how the original bug forwarded raw
+// PII under an audit line claiming it had been redacted.
 func redactRequestContent(parsed map[string]any, r redactor.Redactor) ([]byte, []string, error) {
-	msgs, ok := parsed["messages"].([]any)
-	if !ok {
+	c := &sweepCtx{r: r, prefix: "req"}
+	sweepValue(parsed, c)
+	if len(c.kinds) == 0 {
 		return nil, nil, nil
 	}
-	var kinds []string
-	for _, raw := range msgs {
-		msg, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		switch c := msg["content"].(type) {
-		case string:
-			cleaned, found := r.Redact(c)
-			if len(found) > 0 {
-				msg["content"] = cleaned
-				kinds = append(kinds, found...)
-			}
-		case []any:
-			for _, pt := range c {
-				part, ok := pt.(map[string]any)
-				if !ok {
-					continue
-				}
-				s, ok := part["text"].(string)
-				if !ok {
-					continue
-				}
-				cleaned, found := r.Redact(s)
-				if len(found) > 0 {
-					part["text"] = cleaned
-					kinds = append(kinds, found...)
-				}
-			}
-		}
-	}
-	if len(kinds) == 0 {
-		return nil, nil, nil
-	}
-	out, err := json.Marshal(parsed)
+	out, err := marshalMap(parsed)
 	if err != nil {
-		return nil, kinds, err
+		return nil, c.kinds, err
 	}
-	return out, kinds, nil
+	return out, c.kinds, nil
 }
 
 func extractKey(r *http.Request) string {
