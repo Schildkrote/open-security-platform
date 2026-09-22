@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Schildkrote/open-ai-gateway/internal/policy"
+	"github.com/Schildkrote/open-ai-gateway/internal/ratelimit"
 )
 
 func mkUp(t *testing.T, received *string) *httptest.Server {
@@ -265,6 +266,15 @@ data: [DONE]
 	gw := newTestGateway(t, nil, &buf)
 	gw.UpstreamURL = up.URL
 	gw.RedactResponse = false
+	// BL-15b: a cumulative budget is the SECOND guarantee a stream cannot honour
+	// (an SSE response carries no usage figure to account against), so streaming is
+	// refused while one is configured — even with redaction off. This test asserts
+	// the legitimate case: the operator has claimed neither guarantee, which is an
+	// explicit configuration rather than a bypass. newTestGateway inherits
+	// BudgetTokens: 1_000_000, and leaving it in place made this test pin the exact
+	// bypass the round-7 reviewer reproduced (5/5 streamed completions served
+	// against a 100-token budget, tokens recorded=0).
+	gw.Limiter = ratelimit.New(ratelimit.Limits{RequestsPerMinute: 100})
 
 	raw, _ := json.Marshal(map[string]any{
 		"model":    "gpt-4o",
@@ -278,7 +288,8 @@ data: [DONE]
 
 	t.Logf("status=%d forwarded=%s", rr.Code, received)
 	if rr.Code != http.StatusOK {
-		t.Fatalf("streaming must be allowed when RedactResponse is off, got %d", rr.Code)
+		t.Fatalf("streaming must be allowed when redaction is off AND no budget is "+
+			"configured, got %d", rr.Code)
 	}
 	var fwd map[string]any
 	if err := json.Unmarshal([]byte(received), &fwd); err != nil {

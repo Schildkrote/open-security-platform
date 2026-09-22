@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Schildkrote/open-ai-gateway/internal/ratelimit"
 )
 
 // --- Response field preservation --------------------------------------------
@@ -213,6 +215,12 @@ func TestRequestRedactionPreservesClientParameters(t *testing.T) {
 	// by TestStreamingRefusedWhileResponseRedactionOn, and forwarding stream:true
 	// intact by TestStreamingAllowedWhenResponseRedactionOff.
 	gw.RedactResponse = false
+	// BL-15b: this test is about the REQUEST path, but it sends stream:true, and a
+	// configured cumulative budget now refuses streams (they cannot be accounted
+	// for). Clearing the budget keeps this test focused on what it actually
+	// asserts — that every client parameter survives request-body redaction —
+	// instead of failing on an unrelated streaming refusal.
+	gw.Limiter = ratelimit.New(ratelimit.Limits{RequestsPerMinute: 100})
 	received := captureUpstream(t, gw)
 
 	// A realistic client payload: extra sampling/streaming/tool parameters

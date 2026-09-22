@@ -44,11 +44,35 @@ func (g *Gateway) redactor() redactor.Redactor {
 	return redactor.Regex{}
 }
 
+// noFollowClient is used when the caller did not supply a client.
+//
+// BL-16: the default was http.DefaultClient, which follows up to 10 redirects.
+// The gateway attaches PROVIDER CREDENTIALS to the upstream request (via
+// g.Authorize — e.g. a Bearer token, or Anthropic-style x-api-key), and the
+// upstream is hostile-or-compromised by this project's own threat model. A 307
+// from that upstream is therefore a trivially available exfiltration primitive:
+// the gateway re-sends its credentialed request to an attacker-chosen collector.
+//
+// Go's stdlib only strips `Authorization` on a cross-HOST hop, and only since
+// 1.19 — x-api-key and every other provider header survive to the attacker host.
+// Relying on that behaviour is relying on a stdlib detail covering one of
+// several credential headers.
+//
+// Redirects are refused outright instead: a model-completion endpoint has no
+// legitimate reason to redirect, and http.ErrUseLastResponse surfaces the 3xx to
+// the caller, which then fails closed. An injected Client is used as given so
+// tests (and callers that genuinely want redirect handling) keep control.
+var noFollowClient = &http.Client{
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 func (g *Gateway) client() *http.Client {
 	if g.Client != nil {
 		return g.Client
 	}
-	return http.DefaultClient
+	return noFollowClient
 }
 
 // ServeHTTP implements the gateway decision pipeline.
@@ -79,13 +103,22 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// this the one event a misbehaving Redactor produces is the one that
 			// cannot be traced.
 			g.log(audit.Event{APIKey: maskKey(apiKey), Action: "error", Rule: "handler-panic",
-				Reason: fmt.Sprintf("recovered from panic: %v", rec)})
+				Reason: "recovered from panic: " + panicTypeName(rec),
+				Meta:   map[string]any{"panic_type": panicTypeName(rec)}})
 			http.Error(w, "internal gateway error", http.StatusInternalServerError)
 		}
 	}()
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
 	if err != nil {
+		// BL-17: this returned a silent 400 with ZERO audit events, even though
+		// the key was already extracted above and the panic-recovery comment
+		// states the event a misbehaving component produces "is precisely the one
+		// that must be attributed". A client that opens a request and aborts
+		// mid-body leaves no trace at all — the BL-13 class on the request side.
+		// Mirror that fix: masked key, explicit action and rule.
+		g.log(audit.Event{APIKey: maskKey(apiKey), Action: "denied",
+			Rule: "request-read-error", Reason: "client request body could not be read"})
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -195,6 +228,22 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// BL-15a: deny before forwarding when this key has already exhausted a
+	// configured cumulative budget. Enforcing only after the response arrives
+	// means the tokens are already spent — the upstream was already called and the
+	// work already done — so "deny when a request exceeds the budget" would never
+	// actually deny anything. This is the pre-flight half of enforcement.
+	if g.Limiter.OverBudget(apiKey) {
+		ev.Action = "denied"
+		ev.Rule = "token-budget-exhausted"
+		ev.Reason = "key has exhausted its configured cumulative token budget"
+		g.log(ev)
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{
+			"error": "token budget exhausted",
+		})
+		return
+	}
+
 	// 2. Rate limit.
 	if !g.Limiter.AllowRequest(apiKey, nowFn()) {
 		ev.Action = "rate_limited"
@@ -213,15 +262,27 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// asked for - but it opened that unredactable path. Fail closed instead of
 	// silently disabling the gateway's core function; SSE-aware redaction is the
 	// follow-up.
-	if g.RedactResponse && wantsStreaming(parsedReq) {
+	// BL-15b: a streamed response is SSE, not a JSON object, so it can be neither
+	// swept structurally nor accounted for — there is no usage figure to read. The
+	// refusal therefore has to cover BOTH guarantees the gateway claims, not just
+	// redaction: with redact_response:false AND a budget configured, the previous
+	// condition passed the stream through verbatim while recording zero tokens,
+	// which is the exact budget bypass the refusal exists to prevent (reviewer
+	// probe P2: 5/5 streamed completions served against a 100-token budget).
+	//
+	// Streaming is still allowed when the operator has claimed NEITHER guarantee
+	// (redaction off and no budget configured) — that is an explicit, honest
+	// configuration, not a bypass, and refusing it would break a core LLM-gateway
+	// feature for deployments that never asked for redaction or budgeting.
+	streamUnsafe := g.RedactResponse || g.Limiter.HasBudget()
+	if streamUnsafe && wantsStreaming(parsedReq) {
 		ev.Action = "denied"
 		ev.Rule = "streaming-unsupported"
 		ev.Reason = "streaming responses cannot be redacted or accounted for; refused"
 		g.log(ev)
 		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": "streaming is not supported while response redaction is enabled",
-			"detail": "re-send the request without stream:true, or set " +
-				`"redact_response": false` + " in the gateway config",
+			"error":  "streaming is not supported while response redaction is enabled",
+			"detail": streamingRefusalDetail(g),
 		})
 		return
 	}
@@ -317,6 +378,31 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		setMeta(&ev, "upstream", "response_too_large")
 		g.log(ev)
 		http.Error(w, "upstream response too large", http.StatusBadGateway)
+		return
+	}
+
+	// BL-16: a redirect is refused, not followed. With noFollowClient the 3xx is
+	// surfaced here rather than silently re-requested against another host with
+	// our provider credentials attached. A completion endpoint has no legitimate
+	// reason to redirect, and following one would hand a hostile upstream an
+	// exfiltration primitive for the gateway's own credentials. Fail closed and
+	// say so in the audit trail.
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		loc := resp.Header.Get("Location")
+		ev.Action = "denied"
+		ev.Rule = "upstream-redirect"
+		// The Location is upstream-controlled and may itself carry the reflected
+		// credential or PII, so it is redacted before entering the audit record.
+		// Recording a raw redirect target would make the trail a leak channel.
+		if loc != "" {
+			cleaned, _ := g.redactor().Redact(loc)
+			setMeta(&ev, "location", cleaned)
+		}
+		ev.Reason = "upstream returned a redirect; refused rather than re-sending credentials"
+		g.log(ev)
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"error": "upstream attempted a redirect, which the gateway refuses to follow",
+		})
 		return
 	}
 
@@ -464,7 +550,27 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			ev.Tokens = tokens
 			if !g.Limiter.RecordUsage(apiKey, tokens) {
+				// BL-15c: RecordUsage's false used to be recorded as a
+				// meta diagnostic and then IGNORED — the over-budget completion
+				// was served in full with a 200. That made the budget decorative
+				// in every configuration (reviewer probe P3: 3 requests x 1000
+				// tokens against BudgetTokens=100 all returned 200). The
+				// post-flight half of enforcement: fail closed.
+				//
+				// Nothing has been written to w yet (headers and body are emitted
+				// after this block), so a clean 429 is still possible. The tokens
+				// are already spent upstream, which is why BL-15a denies
+				// pre-flight; this is the backstop for the request that crosses
+				// the line.
 				setMeta(&ev, "budget", "exceeded")
+				ev.Action = "denied"
+				ev.Rule = "token-budget-exceeded"
+				ev.Reason = "response usage exceeded the configured cumulative token budget"
+				g.log(ev)
+				writeJSON(w, http.StatusTooManyRequests, map[string]any{
+					"error": "token budget exceeded",
+				})
+				return
 			}
 		}
 	}
@@ -897,15 +1003,154 @@ func totalTokens(parsed map[string]any) (int64, bool) {
 	return 0, false
 }
 
+// log is the audit CHOKEPOINT. Every event the gateway emits passes through here,
+// so redaction of audit free text is enforced structurally instead of relying on
+// each call site remembering to do it.
+//
+// BL-14: the audit record was itself an unredacted egress channel, two ways.
+// (i) ev.Model was read from the RAW request before any sweep, so a request
+// naming model "jane.doe@example.com" was served a correctly redacted body while
+// the tamper-evident log recorded the email verbatim — and because Model feeds
+// the chain hash, deleting it changes the record's hash, making that leak
+// structural rather than cosmetic. (ii) The panic path interpolated the recovered
+// VALUE into ev.Reason, so a Redactor panicking with request content in its
+// message wrote that content to the log.
+//
+// Both are closed here for every site at once, so a NEW call site cannot re-open
+// them — which is the point of a chokepoint over another per-site patch.
+//
+// Fields swept: Model, Reason, and Meta (several sites put upstream-derived text
+// in Meta, e.g. a refused redirect's Location). Fields deliberately EXEMPT:
+// Action and Rule are closed sets of gateway-chosen constants; Redactions are
+// KIND labels ("req:EMAIL"), not content; APIKey is already masked by maskKey;
+// Tokens and the hashes are numeric/structural. Exempting them is what stops the
+// sweep from corrupting the trail's own vocabulary — redacting a Rule would make
+// records unfilterable.
+//
+// Redaction runs BEFORE Audit.Log, which computes the hash, so the chain commits
+// to the redacted text rather than the raw text.
 func (g *Gateway) log(e audit.Event) {
 	if g.Audit == nil {
 		return
+	}
+	// The sweep itself must be panic-proof. g.log is called from the handler's
+	// panic-recovery defer, and the thing that panicked is very often the
+	// Redactor — so sweeping audit text with that same Redactor would panic a
+	// second time INSIDE the recovery handler. net/http recovers per connection,
+	// but a re-panic there aborts the deferred write entirely: the process loses
+	// the one audit record whose whole purpose is to say a request was processed
+	// and something blew up. Caught in review by
+	// TestAuditMasksKeyOnTheRemainingEarlyReturnPaths/panicking_redactor, which
+	// re-panicked rather than merely failing an assertion.
+	//
+	// Degradation is fail-SAFE, not fail-open: if the redactor cannot be trusted
+	// to sweep, the free-text fields are DROPPED rather than written raw. Losing
+	// a diagnostic string is recoverable from the upstream logs; leaking PII or a
+	// reflected credential into a tamper-evident record is not.
+	if ok := sweepAuditText(g, &e); !ok {
+		// Fail-SAFE, but not fail-STUPID. Free text is dropped rather than written
+		// raw — losing a diagnostic string is recoverable from the upstream logs,
+		// while leaking PII into a tamper-evident record is not.
+		//
+		// Meta keys in auditSafeMetaKeys are preserved, because their values are
+		// gateway-generated from a CLOSED vocabulary and provably cannot carry
+		// request or upstream content. Dropping those too would be over-redaction
+		// in the mirror direction: the panic event is the one record proving a
+		// request was processed and something blew up, and "what type of value
+		// blew up" is the triage signal an operator needs. Caught by
+		// TestBL14_PanicValueNeverReachesAuditReason during implementation.
+		preserved := map[string]any{}
+		for _, k := range auditSafeMetaKeys {
+			if v, present := e.Meta[k]; present {
+				preserved[k] = v
+			}
+		}
+		e.Model = ""
+		e.Reason = ""
+		e.Meta = preserved
+		setMeta(&e, "audit_redaction", "unavailable")
 	}
 	// A failed append breaks the hash chain, so it must not be silent. Failing the
 	// request would be worse - an audit backend hiccup would take down inference -
 	// but the operator has to see it.
 	if err := g.Audit.Log(e); err != nil {
 		log.Printf("open-ai-gateway: audit append FAILED (chain may be incomplete): %v", err)
+	}
+}
+
+// streamingRefusalDetail names whichever guarantee actually forced the refusal,
+// so the operator is told the true reason instead of being pointed at a config
+// knob that may be irrelevant. Naming a knob that is already off sends them in a
+// circle; a refusal message that cannot be acted on is its own defect.
+func streamingRefusalDetail(g *Gateway) string {
+	switch {
+	case g.RedactResponse && g.Limiter.HasBudget():
+		return "re-send without stream:true, or disable response redaction " +
+			`("redact_response": false) and remove the token budget`
+	case g.RedactResponse:
+		return "re-send the request without stream:true, or set " +
+			`"redact_response": false` + " in the gateway config"
+	default:
+		return "re-send the request without stream:true, or remove the " +
+			"cumulative token budget (streamed responses carry no usage figure " +
+			"the gateway can account against)"
+	}
+}
+
+// auditSafeMetaKeys are Meta keys whose values the gateway generates itself from
+// a closed vocabulary, so they cannot carry request or upstream content. They
+// survive the fail-safe drop in g.log for the case where the Redactor cannot be
+// trusted to sweep. Keep this list SHORT and justified per key: every entry is a
+// claim that the value is gateway-authored, and a key added here whose value is
+// ever derived from outside the gateway becomes a leak that no test will catch.
+var auditSafeMetaKeys = []string{"panic_type"}
+
+// sweepAuditText redacts the free-text fields of an audit event in place and
+// reports whether it succeeded. It never panics: a redactor that blows up is the
+// exact situation in which the audit trail is most needed, so this returns false
+// and lets the caller drop the fields instead of crashing the recovery handler.
+//
+// Returns true when every field was swept cleanly. A false return means the
+// event's Model/Reason/Meta could NOT be verified clean and must not be written.
+func sweepAuditText(g *Gateway, e *audit.Event) (ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			ok = false
+		}
+	}()
+	c := &sweepCtx{r: g.redactor(), prefix: "audit"}
+	if s, isStr := sweepValue(e.Model, c).(string); isStr {
+		e.Model = s
+	}
+	if s, isStr := sweepValue(e.Reason, c).(string); isStr {
+		e.Reason = s
+	}
+	if e.Meta != nil {
+		if m, isMap := sweepValue(e.Meta, c).(map[string]any); isMap {
+			e.Meta = m
+		}
+	}
+	for _, k := range c.kinds {
+		e.Redactions = append(e.Redactions, k)
+	}
+	return true
+}
+
+// panicTypeName names the TYPE of a recovered panic value without ever
+// formatting the value itself. A panic value can be any interface{}, including a
+// string holding request content, so `%v` on it is both a log-injection and a
+// credential-echo channel (BL-14ii). Type names come from a closed vocabulary the
+// attacker cannot extend with content.
+func panicTypeName(rec any) string {
+	switch rec.(type) {
+	case nil:
+		return "nil"
+	case string:
+		return "string"
+	case error:
+		return "error"
+	default:
+		return fmt.Sprintf("%T", rec)
 	}
 }
 

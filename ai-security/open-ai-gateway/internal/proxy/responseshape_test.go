@@ -629,8 +629,18 @@ func TestHugeUsageFigureIsClamped(t *testing.T) {
 	toks, _ := gw.Limiter.Usage("test-key")
 	t.Logf("status=%d tokens=%d audit=%.240s", rr.Code, toks, buf.String())
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("a huge usage figure should not fail the request, got %d", rr.Code)
+	// BL-15c: this used to expect 200. Expecting a saturating usage figure to be
+	// SERVED was the decorative-budget bug in miniature — the figure was clamped
+	// correctly, the audit record said "exceeded", and the gateway returned the
+	// over-budget completion anyway with a 200. The clamp was never the thing at
+	// risk here; enforcement was. Now an exhausted budget fails closed.
+	//
+	// The clamping assertions below are the part that genuinely matters and are
+	// unchanged: a figure that wrapped to negative or zero would SILENTLY INCREASE
+	// the caller's remaining budget, which is worse than refusing the request.
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("a usage figure that exhausts the budget must fail closed with 429, got %d",
+			rr.Code)
 	}
 	if toks <= 0 {
 		t.Errorf("an enormous usage figure must saturate to a large positive value, got %d "+
@@ -641,6 +651,10 @@ func TestHugeUsageFigureIsClamped(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "exceeded") {
 		t.Errorf("a saturating figure should trip the budget signal: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), `"rule":"token-budget-exceeded"`) {
+		t.Errorf("the denial must be attributable to the budget rule, not just annotated: %s",
+			buf.String())
 	}
 }
 
