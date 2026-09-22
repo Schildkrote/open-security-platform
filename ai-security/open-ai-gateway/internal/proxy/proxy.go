@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Schildkrote/open-ai-gateway/internal/audit"
 	"github.com/Schildkrote/open-ai-gateway/internal/policy"
@@ -295,27 +296,86 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// adds one.
 	var parsed map[string]any
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		// A response that is not JSON cannot be redacted or accounted for.
+		// A response that is not JSON cannot be swept structurally, so it is swept
+		// as TEXT instead.
 		//
-		// Error bodies are deliberately passed through: an upstream 502 page is
-		// diagnostic information the caller needs, it is not model output, and
-		// swallowing it would make upstream failures undebuggable.
+		// This path used to branch on the status code: a 2xx non-JSON body was
+		// refused with 502, while an error body was passed through untouched on the
+		// reasoning that an upstream 502 page is diagnostic rather than model
+		// output. The reasoning is right about real proxy error pages and wrong
+		// about the security property, because it makes the decision to inspect
+		// bytes depend on a value the UPSTREAM controls. A compromised or
+		// misconfigured upstream only has to answer 500 text/plain - or omit the
+		// content type entirely - and its body reaches the client uninspected.
+		// Verified: a text/plain 500 carrying an email address was served verbatim
+		// through text/html, application/xml and no-content-type variants alike.
 		//
-		// A SUCCESSFUL non-JSON body is different. That is model output the
-		// gateway cannot inspect, so with RedactResponse on it must not reach the
-		// client - it is the same unredactable-to-client path as the streaming
-		// case, just reached by content-type instead of by stream:true.
+		// Redacting the raw text closes that without costing the diagnostic. The
+		// redactor operates on text; running it over an error page leaves
+		// "502 Bad Gateway / nginx / upstream timed out" intact and removes only
+		// what looks like PII. A pinned test asserts a real nginx page survives
+		// byte-for-byte.
+		//
+		// Binary bodies are the one case text redaction cannot serve, so they fail
+		// closed at EVERY status rather than at 2xx only. "Not valid UTF-8" is the
+		// test: a regex pass over image or audio bytes cannot find PII and would
+		// corrupt the payload, so there is nothing honest to do but refuse.
 		setMeta(&ev, "response", "unparseable")
-		if g.RedactResponse && isSuccessfulStatus(resp.StatusCode) {
-			ev.Action = "redaction_failed"
-			setMeta(&ev, "redaction", "unparseable_success_response")
-			g.log(ev)
-			writeJSON(w, http.StatusBadGateway, map[string]any{
-				"error": "upstream returned a successful response that could not be redacted",
-			})
-			return
+		if g.RedactResponse {
+			// A 2xx non-JSON body is refused, and the reason is ACCOUNTING, not
+			// redaction. A successful completion is a billable, rate-limited
+			// action, but no usage figure can be extracted from a body that is not
+			// JSON - so serving it would record a success at zero tokens. That is
+			// the BL-2 budget-bypass class: completions that escape the token
+			// budget. The round-1 fix chose fail-loud accounting over recording
+			// zero, and this path has to be consistent with that. The body never
+			// reaches the client, so nothing leaks by refusing it.
+			if isSuccessfulStatus(resp.StatusCode) {
+				ev.Action = "redaction_failed"
+				setMeta(&ev, "redaction", "unparseable_success_response")
+				g.log(ev)
+				writeJSON(w, http.StatusBadGateway, map[string]any{
+					"error": "upstream returned a successful response that could not be redacted",
+				})
+				return
+			}
+
+			// A non-2xx body is diagnostic, not a billable completion, so there is
+			// no accounting expectation and it SHOULD reach the client - an
+			// upstream 429/502 page is exactly what the caller needs to debug the
+			// failure. But "pass it through" must not mean "pass it through
+			// UNREDACTED", which is what this branch did before and is how a
+			// compromised upstream could leak model output under a 500 text/plain.
+			// Redact the text and serve it with its status intact: a real nginx
+			// error page survives byte-for-byte, only PII is removed.
+			//
+			// Binary is the one case text redaction cannot serve - a regex pass
+			// over image or audio bytes neither finds PII nor leaves the payload
+			// decodable - so it fails closed at every status. "Not valid UTF-8" is
+			// the test.
+			if !utf8.Valid(respBody) {
+				ev.Action = "redaction_failed"
+				setMeta(&ev, "redaction", "uninspectable_binary_response")
+				g.log(ev)
+				writeJSON(w, http.StatusBadGateway, map[string]any{
+					"error": "upstream returned a non-UTF-8 response that could not be redacted",
+				})
+				return
+			}
+			cleaned, found := g.redactor().Redact(string(respBody))
+			for _, k := range found {
+				ev.Redactions = append(ev.Redactions, "resp:"+k)
+			}
+			if cleaned != string(respBody) {
+				respBody = []byte(cleaned)
+				responseRewritten = true
+			}
+			// No usage figure is extractable from a non-JSON body, so token
+			// accounting stays empty. Recorded rather than silently omitted. An
+			// error response is not a billable completion, so zero tokens here is
+			// correct rather than a bypass.
+			setMeta(&ev, "usage", "unparseable")
 		}
-		setMeta(&ev, "redaction", "skipped_unparseable_response")
 	} else {
 		if g.RedactResponse {
 			// redactResponse re-marshals the parsed map, so the served bytes no
@@ -324,59 +384,28 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			before := respBody
 			redacted, kinds, err := redactResponse(parsed, g.redactor())
 
-			// Record ONLY the redactions present in bytes this handler actually
-			// serves. That ordering is load-bearing: the previous version let the
-			// walk write straight onto ev.Redactions, so a mixed response could
-			// record resp:EMAIL for the first choice and then fail on the second,
-			// producing an event that claimed a redaction while the ORIGINAL
-			// unredacted bytes went to the client. A self-contradicting trail is
-			// worse than a missing one - a compliance reader concludes PII was
-			// removed when it was served raw.
-			switch {
-			case err == nil:
-				respBody = redacted
-				ev.Redactions = append(ev.Redactions, kinds...)
-
-			case isSuccessfulStatus(resp.StatusCode):
-				// A SUCCESSFUL response carrying model output the gateway cannot
-				// read must not be served unredacted. Same fail-closed contract as
-				// the non-JSON 2xx case above. Nothing from upstream is served, so
-				// no redaction is claimed.
+			// Record the redactions the sweep applied and serve the re-encoded
+			// map. There is no status-code branch here any more, and that is
+			// deliberate: the previous version failed closed on 2xx and passed
+			// error bodies through, so the gateway trusted an UPSTREAM-CONTROLLED
+			// status code for a security decision. A sweep that inspects every
+			// string needs no such branch - the only failure left is "could not
+			// marshal the result", which fails closed for every status alike.
+			//
+			// Error diagnostics still survive: the sweep redacts PII out of the
+			// error object and leaves its text alone, and resp.StatusCode is
+			// written below, so a 429 stays a 429 with its message intact.
+			if err != nil {
 				ev.Action = "redaction_failed"
-				setMeta(&ev, "redaction", "unparseable_response_shape")
+				setMeta(&ev, "redaction", "unreencodable_response")
 				g.log(ev)
 				writeJSON(w, http.StatusBadGateway, map[string]any{
-					"error": "upstream returned a successful response that could not be redacted",
+					"error": "upstream response could not be redacted",
 				})
 				return
-
-			default:
-				// An ERROR response in an odd shape keeps its status and its
-				// diagnostic body - replacing an upstream 429 with a generic 502
-				// would destroy the very information the caller needs to debug the
-				// failure. But "keep the diagnostic" does not mean "keep the raw
-				// bytes": the walk already redacted every part of parsed it could
-				// read, so re-encoding the map serves the SAME status and the SAME
-				// error text with those redactions applied. A compromised or
-				// bridging upstream can otherwise emit model output under a non-2xx
-				// label and have it reach the client uninspected.
-				//
-				// The skip is still audited, because part of the body really was
-				// left uninspected.
-				reEncoded, marshalErr := marshalMap(parsed)
-				if marshalErr != nil {
-					ev.Action = "redaction_failed"
-					setMeta(&ev, "redaction", "unreencodable_error_response")
-					g.log(ev)
-					writeJSON(w, http.StatusBadGateway, map[string]any{
-						"error": "upstream error response could not be redacted",
-					})
-					return
-				}
-				respBody = reEncoded
-				ev.Redactions = append(ev.Redactions, kinds...)
-				setMeta(&ev, "redaction", "skipped_uninspectable_error_shape")
 			}
+			respBody = redacted
+			ev.Redactions = append(ev.Redactions, kinds...)
 
 			if !bytes.Equal(before, respBody) {
 				responseRewritten = true
@@ -459,83 +488,36 @@ func connectionListedHeaders(h http.Header) map[string]bool {
 }
 
 // redactResponse redacts model output in place within parsed and returns the
-// re-marshalled body, the redaction kinds it applied, and an error for any shape
-// it could not inspect.
+// re-marshalled body, the redaction kinds applied, and an error only if the
+// result cannot be marshalled.
 //
-// It covers the output shapes OpenAI-compatible upstreams actually emit:
-//   - choices[].message.content as a string           (standard completion)
-//   - choices[].message.content as an array of parts   (multimodal / vLLM)
-//   - choices[].delta.content                          (chunked output, and some
-//     bridges emit delta inside non-stream JSON)
-//   - choices[].text                                   (legacy completions API)
+// It is a TOTAL SWEEP, not a shape-aware walker, and that difference is the
+// entire point. Four successive review rounds each found PII leaving the gateway
+// through a shape the previous fix had not enumerated: content as a parts array,
+// a messages container that was an object, delta.content, legacy choices[].text,
+// and message.text. Each fix added the newly-named shapes to a hand-maintained
+// list, so the list was always one review behind. An enumerated walker can only
+// ever be as complete as its author's imagination.
 //
-// It deliberately does NOT take the audit event. Recording redactions onto the
-// event from inside the walk is what produced a self-contradicting audit trail:
-// on a mixed response the walk could append resp:EMAIL for the first choice and
-// then hit an uninspectable shape in the second, leaving an event that claimed a
-// redaction while the caller served the ORIGINAL unredacted bytes. The caller now
-// owns the event and records exactly the redactions present in the bytes it
-// actually serves.
+// A sweep needs no imagination. encoding/json decodes into exactly six Go types
+// (nil, bool, float64, string, []any, map[string]any), so a switch over those six
+// is exhaustive by construction: every string anywhere in the document is
+// inspected, regardless of container, nesting depth or key name. No shape can hide
+// a value, because no shape is consulted.
 //
-// Kinds are returned even alongside an error, because the walk mutates parsed IN
-// PLACE: those redactions really are applied to the map, so a caller that serves
-// a re-encoding of parsed must also record them.
+// A consequence worth stating: the caller no longer needs the upstream STATUS
+// CODE to make a security decision. The previous version failed closed on 2xx and
+// passed error bodies through, so the gateway trusted an upstream-controlled
+// status code for a security decision and a compromised upstream could try to get
+// model output served under a non-2xx label. That attack surface is gone, because
+// no branch serves uninspected bytes any more.
 //
-// A marshal failure is an error rather than a fallback to the original bytes:
-// serving the originals after a finding would forward unredacted output while the
-// trail recorded a redaction.
+// Keys in opaqueKeys are skipped: they carry binary payloads that are not natural
+// language, where running a PII regex is both wasteful and liable to mangle the
+// data into something the client cannot decode.
 func redactResponse(parsed map[string]any, r redactor.Redactor) ([]byte, []string, error) {
 	var kinds []string
-
-	raw, present := parsed["choices"]
-	if !present {
-		// No choices: nothing model-generated to inspect (e.g. an embeddings
-		// response). Not an error.
-		body, err := marshalMap(parsed)
-		return body, nil, err
-	}
-	choices, ok := raw.([]any)
-	if !ok {
-		return nil, nil, errUninspectableResponseShape
-	}
-	for _, c := range choices {
-		choice, ok := c.(map[string]any)
-		if !ok {
-			return nil, kinds, errUninspectableResponseShape
-		}
-		// Each of these containers may hold model output; every one must be
-		// either absent or an object we can walk.
-		for _, key := range []string{"message", "delta"} {
-			v, p := choice[key]
-			if !p || v == nil {
-				continue
-			}
-			container, ok := v.(map[string]any)
-			if !ok {
-				return nil, kinds, errUninspectableResponseShape
-			}
-			found, err := redactContentField(container, r)
-			kinds = append(kinds, found...)
-			if err != nil {
-				return nil, kinds, err
-			}
-		}
-		// Legacy completions shape: choices[].text carries the output directly.
-		if v, p := choice["text"]; p {
-			switch s := v.(type) {
-			case nil:
-				// No output in this choice.
-			case string:
-				cleaned, found := r.Redact(s)
-				choice["text"] = cleaned
-				for _, k := range found {
-					kinds = append(kinds, "resp:"+k)
-				}
-			default:
-				return nil, kinds, errUninspectableResponseShape
-			}
-		}
-	}
+	sweepValue(parsed, r, &kinds)
 	body, err := marshalMap(parsed)
 	if err != nil {
 		return nil, kinds, err
@@ -543,58 +525,65 @@ func redactResponse(parsed map[string]any, r redactor.Redactor) ([]byte, []strin
 	return body, kinds, nil
 }
 
-// redactContentField redacts a message-or-delta container's "content" member in
-// place and returns the kinds it redacted. Absent or null content is legitimate
-// (tool-call turns, role-only deltas); a string and a parts array are redacted;
-// anything else is an uninspectable shape.
-func redactContentField(container map[string]any, r redactor.Redactor) ([]string, error) {
-	v, present := container["content"]
-	if !present || v == nil {
-		return nil, nil
-	}
-	var kinds []string
-	switch c := v.(type) {
+// opaqueKeys hold non-textual payloads. "b64_json" is base64-encoded image or
+// audio; redacting inside it would corrupt the stream and cannot meaningfully
+// match a PII pattern. Embedding vectors need no entry - they decode to float64,
+// which the sweep ignores.
+var opaqueKeys = map[string]bool{
+	"b64_json": true,
+}
+
+// sweepValue redacts every string in a JSON-decoded value, in place, and appends
+// the kinds it found. Strings are immutable in Go, so containers reassign their
+// children and the function returns the (possibly replaced) value.
+//
+// The default branch is a deliberate no-op rather than an error: encoding/json
+// cannot produce a seventh type when decoding into any, so reaching it would mean
+// a future change to how the body is decoded. json.Number is handled explicitly
+// for that reason - it is a string type and a numeric literal cannot carry PII,
+// but letting it fall through to default would leave the assumption unstated.
+func sweepValue(v any, r redactor.Redactor, kinds *[]string) any {
+	switch tv := v.(type) {
+	case nil, bool, float64:
+		return v
+	case json.Number:
+		// A numeric literal. Not natural language, cannot carry PII.
+		return v
 	case string:
-		cleaned, found := r.Redact(c)
-		container["content"] = cleaned
+		cleaned, found := r.Redact(tv)
 		for _, k := range found {
-			kinds = append(kinds, "resp:"+k)
+			*kinds = append(*kinds, "resp:"+k)
 		}
-		return kinds, nil
+		return cleaned
 	case []any:
-		for _, pt := range c {
-			part, ok := pt.(map[string]any)
-			if !ok {
-				return kinds, errUninspectableResponseShape
-			}
-			s, present := part["text"]
-			if !present || s == nil {
-				// Image/audio parts carry no text to redact.
+		for idx, el := range tv {
+			tv[idx] = sweepValue(el, r, kinds)
+		}
+		return tv
+	case map[string]any:
+		for k, val := range tv {
+			if opaqueKeys[k] {
 				continue
 			}
-			text, ok := s.(string)
-			if !ok {
-				return kinds, errUninspectableResponseShape
-			}
-			cleaned, found := r.Redact(text)
-			part["text"] = cleaned
-			for _, k := range found {
-				kinds = append(kinds, "resp:"+k)
-			}
+			tv[k] = sweepValue(val, r, kinds)
 		}
-		return kinds, nil
+		return tv
 	default:
-		return kinds, errUninspectableResponseShape
+		return v
 	}
 }
 
+// isSuccessfulStatus reports whether a status code denotes success.
+//
+// It is used for exactly ONE decision, and it is important to be precise about
+// which: whether a non-JSON 2xx body may be served at all. It is NOT used to
+// decide whether to redact - redaction now happens at every status, so no
+// security property depends on a value the upstream controls. That distinction is
+// the whole difference between this and the round-3 bug, where the status code
+// chose whether bytes were inspected at all.
 func isSuccessfulStatus(code int) bool {
 	return code >= 200 && code < 300
 }
-
-// errUninspectableResponseShape reports a successful response whose model output
-// the gateway cannot read, which must not be served to the client.
-var errUninspectableResponseShape = errors.New("response contains model output in a shape the gateway cannot redact")
 
 // marshalMap re-marshals a decoded response. Failure is returned rather than
 // papered over with the original bytes.

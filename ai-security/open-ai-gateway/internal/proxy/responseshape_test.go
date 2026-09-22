@@ -117,34 +117,60 @@ func TestResponseLegacyTextIsRedacted(t *testing.T) {
 
 // A successful response whose model output is in a shape the gateway cannot read
 // must fail closed rather than be served unredacted.
-func TestResponseUninspectableShapeFailsClosed(t *testing.T) {
+// TestUninspectableShapesAreRedactedNotRefused pins the behaviour change that
+// came with the total sweep, and states it explicitly because it reverses what an
+// earlier revision of this test asserted.
+//
+// Previously these shapes were REFUSED with 502: the walker enumerated known
+// containers, could not recognise these, and failed closed. Failing closed was
+// right when the alternative was forwarding uninspected bytes, but it destroyed
+// the response - the client got an error instead of an answer, and a shape the
+// gateway happened not to enumerate became a denial of service.
+//
+// The sweep inspects every string in the document regardless of container, so
+// there is nothing left uninspected to fail closed on. These shapes are now
+// REDACTED AND SERVED at 200. That is strictly better: PII is still removed (the
+// invariant that matters), and the client gets a usable response.
+//
+// Non-sensitive values are deliberately PRESERVED. An earlier assertion required
+// the numbers 12345 and 9999 to be absent, because refusing the whole response
+// removed them incidentally. A number is not PII; destroying it would be data
+// loss, so the sweep leaves it alone and this test now requires it to survive.
+func TestUninspectableShapesAreRedactedNotRefused(t *testing.T) {
 	cases := []struct {
-		name string
-		body string
+		name        string
+		body        string
+		wantPIIGone bool
 	}{
 		{
 			"choices is an object",
 			`{"id":"x","choices":{"0":{"message":{"content":"` + piiEmail + `"}}},"usage":{"total_tokens":2}}`,
+			true,
 		},
 		{
 			"choice is a string",
 			`{"id":"x","choices":["` + piiEmail + `"],"usage":{"total_tokens":2}}`,
+			true,
 		},
 		{
 			"message is a string",
 			`{"id":"x","choices":[{"message":"` + piiEmail + `"}],"usage":{"total_tokens":2}}`,
+			true,
 		},
 		{
 			"content is a number",
 			`{"id":"x","choices":[{"message":{"content":12345}}],"usage":{"total_tokens":2}}`,
+			false,
 		},
 		{
 			"content part is a string",
 			`{"id":"x","choices":[{"message":{"content":["` + piiEmail + `"]}}],"usage":{"total_tokens":2}}`,
+			true,
 		},
 		{
 			"content part text is a number",
 			`{"id":"x","choices":[{"message":{"content":[{"type":"text","text":9999}]}}],"usage":{"total_tokens":2}}`,
+			false,
 		},
 	}
 
@@ -157,16 +183,41 @@ func TestResponseUninspectableShapeFailsClosed(t *testing.T) {
 
 			rr := post(t, gw, "gpt-4o", "hello")
 			client := rr.Body.String()
-			t.Logf("status=%d client=%.200s audit=%.280s", rr.Code, client, buf.String())
+			t.Logf("status=%d client=%.220s audit=%.280s", rr.Code, client, buf.String())
 
-			if rr.Code != http.StatusBadGateway {
-				t.Errorf("an uninspectable success response must fail closed with 502, got %d", rr.Code)
+			// THE INVARIANT: no PII egress, whatever the shape.
+			if strings.Contains(client, piiEmail) {
+				t.Errorf("LEAK: PII reached the client: %s", client)
 			}
-			if strings.Contains(client, piiEmail) || strings.Contains(client, "12345") || strings.Contains(client, "9999") {
-				t.Errorf("LEAK: uninspectable model output reached the client: %s", client)
+
+			// The response is served, not destroyed.
+			if rr.Code != http.StatusOK {
+				t.Errorf("status = %d; a swept response should be served at 200 "+
+					"rather than refused, because nothing is left uninspected", rr.Code)
 			}
-			if !strings.Contains(buf.String(), "unparseable_response_shape") {
-				t.Errorf("the fail-closed reason was not audited: %s", buf.String())
+
+			if tc.wantPIIGone {
+				if !strings.Contains(client, "[REDACTED:EMAIL]") {
+					t.Errorf("the PII was not replaced by a redaction marker: %s", client)
+				}
+				if !auditClaimsRedaction(buf.String()) {
+					t.Errorf("a redaction happened but the audit does not record it: %s",
+						buf.String())
+				}
+			} else {
+				// A number carries no PII, so it must survive untouched.
+				if !strings.Contains(client, "12345") && !strings.Contains(client, "9999") {
+					t.Errorf("a non-sensitive numeric value was destroyed: %s", client)
+				}
+				if auditClaimsRedaction(buf.String()) {
+					t.Errorf("OVER-CLAIM: nothing sensitive was present but the audit "+
+						"records a redaction: %s", buf.String())
+				}
+			}
+
+			// Upstream identity fields must survive the sweep (branch purpose).
+			if !strings.Contains(client, `"id":"x"`) {
+				t.Errorf("the upstream id was lost: %s", client)
 			}
 		})
 	}

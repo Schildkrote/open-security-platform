@@ -24,6 +24,16 @@ import (
 // message carrying an email and one uninspectable choice.
 // ---------------------------------------------------------------------------
 
+// bl7MixedShape is the round-3 reviewer's exact reproduction: HTTP 429 carrying
+// one readable message with an email and one element in a shape the then-current
+// walker could not classify. The walker redacted the first, errored on the second,
+// and the caller served the ORIGINAL bytes under an audit line claiming a
+// redaction.
+//
+// The shape is retained verbatim as a regression fixture even though the sweep no
+// longer treats any part of it as unreadable: {"text":5} is now simply a number
+// that gets preserved. Keeping the original bytes means a future regression to
+// shape-enumeration fails against the exact input that exposed it.
 const bl7MixedShape = `{"choices":[` +
 	`{"message":{"role":"assistant","content":"jane.doe@example.com"}},` +
 	`{"text":5}` +
@@ -101,9 +111,13 @@ func TestBL7AuditNeverClaimsARedactionTheServedBodyDisproves(t *testing.T) {
 					auditLine)
 			}
 
-			// 5. The partial skip must still be visible in the trail.
-			if !strings.Contains(auditLine, "skipped_uninspectable_error_shape") {
-				t.Errorf("the uninspected portion was not audited: %s", auditLine)
+			// 5. With the total sweep there is no longer any uninspected portion,
+			//    so the skip diagnostic must NOT appear - asserting it would pin a
+			//    mechanism that no longer exists. What must appear instead is the
+			//    record of the redaction that really was applied (assertion 4b).
+			if strings.Contains(auditLine, "skipped_uninspectable_error_shape") {
+				t.Errorf("the sweep inspected every string, so nothing should be "+
+					"reported as skipped: %s", auditLine)
 			}
 
 			// 6. Content-Length must stay truthful after the re-encode.
@@ -169,7 +183,20 @@ func TestBL7FullyUninspectableErrorKeepsStatus(t *testing.T) {
 
 // A MIXED 2xx must still fail closed - the exemption applies to errors only.
 // This pins that fixing BL-7 did not reopen BL-6.
-func TestBL7MixedShapeStillFailsClosedOn2xx(t *testing.T) {
+// TestBL7MixedShapeOn2xxIsRedactedNotRefused reverses what this test asserted in
+// the previous revision, deliberately and for a stated reason.
+//
+// It used to require 502: the walker could not classify {"text":5}, so the whole
+// response was refused. That was correct when refusing was the only way to avoid
+// serving uninspected bytes, but it turned one unclassifiable element into a
+// denial of service for an otherwise valid completion.
+//
+// The sweep reads every string regardless of container, so nothing is
+// uninspected and there is nothing left to fail closed on. The response is now
+// served at 200 with the email redacted and the numeric element preserved. The
+// invariant that actually matters - no PII egress - is unchanged and still
+// asserted; what changed is that the client gets an answer instead of an error.
+func TestBL7MixedShapeOn2xxIsRedactedNotRefused(t *testing.T) {
 	up := serveStatusAndBody(t, http.StatusOK, bl7MixedShape)
 
 	var buf bytes.Buffer
@@ -177,16 +204,27 @@ func TestBL7MixedShapeStillFailsClosedOn2xx(t *testing.T) {
 	gw.UpstreamURL = up.URL
 
 	rr := post(t, gw, "gpt-4o", "hello")
-	t.Logf("status=%d body=%.200s audit=%.300s", rr.Code, rr.Body.String(), buf.String())
+	client := rr.Body.String()
+	t.Logf("status=%d body=%.220s audit=%.300s", rr.Code, client, buf.String())
 
-	if rr.Code != http.StatusBadGateway {
-		t.Errorf("a mixed-shape 2xx must fail closed with 502, got %d", rr.Code)
+	if strings.Contains(client, piiEmail) {
+		t.Errorf("LEAK: PII reached the client: %s", client)
 	}
-	if strings.Contains(rr.Body.String(), piiEmail) {
-		t.Errorf("LEAK: PII reached the client on a refused 2xx: %s", rr.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d; with nothing left uninspected the response should be "+
+			"served rather than refused", rr.Code)
 	}
-	if auditClaimsRedaction(buf.String()) {
-		t.Errorf("nothing was served, so no redaction may be claimed: %s", buf.String())
+	if !strings.Contains(client, "[REDACTED:EMAIL]") {
+		t.Errorf("the email was not replaced by a redaction marker: %s", client)
+	}
+	// A redaction really happened, so the trail must say so.
+	if !auditClaimsRedaction(buf.String()) {
+		t.Errorf("UNDER-REPORTED: redacted output was served but the audit records "+
+			"no redaction: %s", buf.String())
+	}
+	// The non-sensitive element must survive: it is a number, not PII.
+	if !strings.Contains(client, `"text":5`) {
+		t.Errorf("a non-sensitive numeric element was destroyed: %s", client)
 	}
 }
 
@@ -198,25 +236,44 @@ func TestBL7MixedShapeStillFailsClosedOn2xx(t *testing.T) {
 
 // M20: choices[].text as a non-string is an uninspectable shape, not something to
 // skip past.
-func TestResponseLegacyTextNonStringFailsClosed(t *testing.T) {
-	for name, body := range map[string]string{
-		"number": `{"choices":[{"index":0,"text":12345}],"usage":{"total_tokens":1}}`,
-		"bool":   `{"choices":[{"index":0,"text":true}],"usage":{"total_tokens":1}}`,
-		"object": `{"choices":[{"index":0,"text":{"a":"` + piiEmail + `"}}],"usage":{"total_tokens":1}}`,
+// TestResponseLegacyTextNonStringIsSwept covers choices[].text carrying a
+// non-string value. The previous revision refused these with 502 because the
+// walker's type switch had no case for them; the sweep needs no case, since a
+// number or bool simply is not a string and is passed through untouched, while a
+// nested object has its strings redacted in place.
+//
+// This is the M20 gap the round-3 battery found, now pinned by behaviour rather
+// than by status code.
+func TestResponseLegacyTextNonStringIsSwept(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body        string
+		wantPIIGone bool
+	}{
+		"number": {`{"choices":[{"index":0,"text":12345}],"usage":{"total_tokens":1}}`, false},
+		"bool":   {`{"choices":[{"index":0,"text":true}],"usage":{"total_tokens":1}}`, false},
+		"object": {`{"choices":[{"index":0,"text":{"a":"` + piiEmail + `"}}],"usage":{"total_tokens":1}}`, true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			up := serveStatusAndBody(t, http.StatusOK, body)
+			up := serveStatusAndBody(t, http.StatusOK, tc.body)
 			var buf bytes.Buffer
 			gw := newTestGateway(t, nil, &buf)
 			gw.UpstreamURL = up.URL
 
 			rr := post(t, gw, "gpt-4o", "hello")
-			t.Logf("status=%d body=%.160s", rr.Code, rr.Body.String())
-			if rr.Code != http.StatusBadGateway {
-				t.Errorf("a non-string choices[].text must fail closed, got %d", rr.Code)
+			client := rr.Body.String()
+			t.Logf("status=%d body=%.200s", rr.Code, client)
+
+			if strings.Contains(client, piiEmail) {
+				t.Errorf("LEAK: %s", client)
 			}
-			if strings.Contains(rr.Body.String(), piiEmail) {
-				t.Errorf("LEAK: %s", rr.Body.String())
+			if rr.Code != http.StatusOK {
+				t.Errorf("status = %d; a swept response should be served, not refused", rr.Code)
+			}
+			if tc.wantPIIGone && !strings.Contains(client, "[REDACTED:EMAIL]") {
+				t.Errorf("PII was not replaced by a marker: %s", client)
+			}
+			if !tc.wantPIIGone && !strings.Contains(client, "12345") && !strings.Contains(client, "true") {
+				t.Errorf("a non-sensitive value was destroyed: %s", client)
 			}
 		})
 	}
