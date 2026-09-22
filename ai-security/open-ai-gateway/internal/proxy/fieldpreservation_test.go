@@ -207,6 +207,12 @@ func captureUpstream(t *testing.T, gw *Gateway) *string {
 func TestRequestRedactionPreservesClientParameters(t *testing.T) {
 	var buf bytes.Buffer
 	gw := newTestGateway(t, nil, &buf)
+	// Response redaction is off so that stream:true is forwarded rather than
+	// refused. This test is about the REQUEST path: every client parameter must
+	// survive a request-body redaction. The streaming refusal itself is covered
+	// by TestStreamingRefusedWhileResponseRedactionOn, and forwarding stream:true
+	// intact by TestStreamingAllowedWhenResponseRedactionOff.
+	gw.RedactResponse = false
 	received := captureUpstream(t, gw)
 
 	// A realistic client payload: extra sampling/streaming/tool parameters
