@@ -73,24 +73,39 @@ func main() {
 		Authorize:      authorize,
 	}
 
+	mux := buildMux(gw, reg, os.Getenv("OSP_AUTH_SECRET"))
+
+	log.Printf("open-ai-gateway listening on %s (upstream=%s)", cfg.Listen, cfg.UpstreamURL)
+	log.Fatal(http.ListenAndServe(cfg.Listen, mux))
+}
+
+// buildMux wires the gateway's routes. It is a separate function so the routing
+// decisions are TESTABLE: main() built this inline, which left main.go at 0%
+// coverage and meant nothing pinned the behaviour of /v1/models or the auth gate
+// on /admin/tools. Both are security-relevant - one because it must NOT disclose
+// the tool registry, the other because it must require a credential.
+//
+// Only POST carries an inference body. Everything else under /v1/ (GET
+// /v1/models, HEAD probes, OPTIONS preflight) has no request body to inspect, so
+// routing it into the gateway made it fail with "request body must be a JSON
+// object" - a regression introduced by the fail-closed parse. Answered here
+// instead.
+//
+// /v1/models returns an EMPTY list on purpose. This gateway is a
+// chat-completions policy point, not a model catalogue, and it must not enumerate
+// anything it has not been configured to serve:
+//   - it is NOT served from the tool registry, which is a different domain object
+//     (Name/Kind/Risk/Endpoint/Scopes) and is already exposed under the
+//     authenticated /admin/tools route. Serving it here would mislabel tools as
+//     models AND disclose their endpoints and scopes on an unauthenticated path.
+//   - it is NOT proxied upstream, which would advertise model names that no
+//     policy rule was written against.
+//
+// Clients that hard-require a non-empty catalogue should be pointed at their
+// provider's own endpoint rather than at this gateway.
+func buildMux(gw http.Handler, reg *registry.Registry, authSecret string) http.Handler {
 	mux := http.NewServeMux()
-	// Only POST carries an inference body. Everything else under /v1/ (GET
-	// /v1/models, HEAD probes, OPTIONS preflight) has no request body to inspect,
-	// so routing it into the gateway made it fail with "request body must be a JSON
-	// object" - a regression introduced by the fail-closed parse. Answered here
-	// instead.
-	//
-	// /v1/models returns an EMPTY list on purpose. This gateway is a
-	// chat-completions policy point, not a model catalogue, and it must not
-	// enumerate anything it has not been configured to serve:
-	//   - it is NOT served from the tool registry, which is a different domain
-	//     object (Name/Kind/Risk/Endpoint/Scopes) and is already exposed under the
-	//     authenticated /admin/tools route. Serving it here would mislabel tools as
-	//     models AND disclose their endpoints and scopes on an unauthenticated path.
-	//   - it is NOT proxied upstream, which would advertise model names that no
-	//     policy rule was written against.
-	// Clients that hard-require a non-empty catalogue should be pointed at their
-	// provider's own endpoint rather than at this gateway.
+
 	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -115,12 +130,12 @@ func main() {
 		case http.MethodGet:
 			_ = json.NewEncoder(w).Encode(reg.List())
 		case http.MethodPost:
-			var t registry.Tool
-			if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+			var tool registry.Tool
+			if err := json.NewDecoder(r.Body).Decode(&tool); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			reg.Register(t)
+			reg.Register(tool)
 			w.WriteHeader(http.StatusCreated)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -128,8 +143,7 @@ func main() {
 	})
 	// Opt-in shared OIDC/JWT auth (Phase 1): set OSP_AUTH_SECRET to protect the
 	// admin API. Empty secret = open (offline default).
-	mux.Handle("/admin/tools", auth.Middleware(os.Getenv("OSP_AUTH_SECRET"), "gateway:admin", adminTools))
+	mux.Handle("/admin/tools", auth.Middleware(authSecret, "gateway:admin", adminTools))
 
-	log.Printf("open-ai-gateway listening on %s (upstream=%s)", cfg.Listen, cfg.UpstreamURL)
-	log.Fatal(http.ListenAndServe(cfg.Listen, mux))
+	return mux
 }

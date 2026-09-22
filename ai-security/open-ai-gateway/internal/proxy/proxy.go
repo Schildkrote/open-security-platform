@@ -55,6 +55,15 @@ func (g *Gateway) client() *http.Client {
 const maxBodyBytes = 32 << 20 // 32 MiB
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Resolved before the recovery handler is registered, because that handler
+	// closes over it. A closure cannot capture a variable that is not yet in
+	// scope: declaring this after the defer made the panic event the one audit
+	// record that could never name its caller - and for a gateway whose selling
+	// point is a tamper-evident trail, the event a misbehaving Redactor produces
+	// is precisely the one that must be attributable. It also sits above the
+	// body-size refusal so that path is attributed too.
+	apiKey := extractKey(r)
+
 	// A misbehaving Redactor (e.g. a backend that panics on malformed input) must
 	// not escape the handler. net/http recovers per connection so the process
 	// survives - but the panic left ZERO audit events for a request that WAS
@@ -62,15 +71,15 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// that gap is itself the defect. Recovering keeps the chain complete.
 	defer func() {
 		if rec := recover(); rec != nil {
-			g.log(audit.Event{Action: "error", Rule: "handler-panic",
+			// Attributed: the closure captures by reference, and the key is
+			// resolved above, so the panic event can name the caller. Without
+			// this the one event a misbehaving Redactor produces is the one that
+			// cannot be traced.
+			g.log(audit.Event{APIKey: maskKey(apiKey), Action: "error", Rule: "handler-panic",
 				Reason: fmt.Sprintf("recovered from panic: %v", rec)})
 			http.Error(w, "internal gateway error", http.StatusInternalServerError)
 		}
 	}()
-
-	// Resolved before anything is audited so every event, including the
-	// body-size refusal below, can be attributed to a caller.
-	apiKey := extractKey(r)
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
 	if err != nil {
@@ -148,6 +157,15 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// shape check would re-suppress the non-array container case, which is exactly
 	// the bypass being closed.
 	if !contentOK {
+		// Record the refusal as a refusal. ev.Action still holds whatever the
+		// policy engine decided - "allow" under an allow-default config - so an
+		// event written here reads as a successful forward for a request that was
+		// actually rejected with 400. The streaming refusal already set
+		// action:"denied"; this path must agree with it or the trail misrepresents
+		// its own outcome.
+		ev.Action = "denied"
+		ev.Rule = "unsupported-content-shape"
+		ev.Reason = "message content is not in a shape the gateway can inspect"
 		g.log(ev)
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error":  "message content is not in a supported shape",
@@ -304,11 +322,26 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// longer match what upstream sent even when nothing was redacted.
 			// Validator headers describing the upstream body must not be copied.
 			before := respBody
-			redacted, err := redactResponse(parsed, g.redactor(), &ev)
-			if err != nil && isSuccessfulStatus(resp.StatusCode) {
+			redacted, kinds, err := redactResponse(parsed, g.redactor())
+
+			// Record ONLY the redactions present in bytes this handler actually
+			// serves. That ordering is load-bearing: the previous version let the
+			// walk write straight onto ev.Redactions, so a mixed response could
+			// record resp:EMAIL for the first choice and then fail on the second,
+			// producing an event that claimed a redaction while the ORIGINAL
+			// unredacted bytes went to the client. A self-contradicting trail is
+			// worse than a missing one - a compliance reader concludes PII was
+			// removed when it was served raw.
+			switch {
+			case err == nil:
+				respBody = redacted
+				ev.Redactions = append(ev.Redactions, kinds...)
+
+			case isSuccessfulStatus(resp.StatusCode):
 				// A SUCCESSFUL response carrying model output the gateway cannot
 				// read must not be served unredacted. Same fail-closed contract as
-				// the non-JSON 2xx case above.
+				// the non-JSON 2xx case above. Nothing from upstream is served, so
+				// no redaction is claimed.
 				ev.Action = "redaction_failed"
 				setMeta(&ev, "redaction", "unparseable_response_shape")
 				g.log(ev)
@@ -316,17 +349,35 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					"error": "upstream returned a successful response that could not be redacted",
 				})
 				return
-			}
-			if err != nil {
-				// An ERROR response in an odd shape is passed through. It is
-				// diagnostic rather than model output, and replacing an upstream
-				// 429 with a generic 502 would destroy the very information the
-				// caller needs to debug the failure. The skip is still audited so
-				// the trail shows the body left uninspected.
+
+			default:
+				// An ERROR response in an odd shape keeps its status and its
+				// diagnostic body - replacing an upstream 429 with a generic 502
+				// would destroy the very information the caller needs to debug the
+				// failure. But "keep the diagnostic" does not mean "keep the raw
+				// bytes": the walk already redacted every part of parsed it could
+				// read, so re-encoding the map serves the SAME status and the SAME
+				// error text with those redactions applied. A compromised or
+				// bridging upstream can otherwise emit model output under a non-2xx
+				// label and have it reach the client uninspected.
+				//
+				// The skip is still audited, because part of the body really was
+				// left uninspected.
+				reEncoded, marshalErr := marshalMap(parsed)
+				if marshalErr != nil {
+					ev.Action = "redaction_failed"
+					setMeta(&ev, "redaction", "unreencodable_error_response")
+					g.log(ev)
+					writeJSON(w, http.StatusBadGateway, map[string]any{
+						"error": "upstream error response could not be redacted",
+					})
+					return
+				}
+				respBody = reEncoded
+				ev.Redactions = append(ev.Redactions, kinds...)
 				setMeta(&ev, "redaction", "skipped_uninspectable_error_shape")
-			} else {
-				respBody = redacted
 			}
+
 			if !bytes.Equal(before, respBody) {
 				responseRewritten = true
 			}
@@ -407,8 +458,9 @@ func connectionListedHeaders(h http.Header) map[string]bool {
 	return out
 }
 
-// redactResponse redacts model output in place and returns the re-marshalled
-// response, preserving every other upstream field.
+// redactResponse redacts model output in place within parsed and returns the
+// re-marshalled body, the redaction kinds it applied, and an error for any shape
+// it could not inspect.
 //
 // It covers the output shapes OpenAI-compatible upstreams actually emit:
 //   - choices[].message.content as a string           (standard completion)
@@ -417,90 +469,103 @@ func connectionListedHeaders(h http.Header) map[string]bool {
 //     bridges emit delta inside non-stream JSON)
 //   - choices[].text                                   (legacy completions API)
 //
-// It returns an error for any shape it cannot inspect - a non-array choices, a
-// non-object choice/message/delta, or content that is neither a string, a parts
-// array, null nor absent. The caller fails closed on that error.
+// It deliberately does NOT take the audit event. Recording redactions onto the
+// event from inside the walk is what produced a self-contradicting audit trail:
+// on a mixed response the walk could append resp:EMAIL for the first choice and
+// then hit an uninspectable shape in the second, leaving an event that claimed a
+// redaction while the caller served the ORIGINAL unredacted bytes. The caller now
+// owns the event and records exactly the redactions present in the bytes it
+// actually serves.
 //
-// This mirrors the request-side contract (extractContent). Without it the
-// response path silently skipped redaction for anything outside the narrow
-// choices[].message.content-as-string whitelist: a parts array, a delta, or a
-// choices object were served to the client verbatim with status 200, PII intact,
-// under an audit event reading action "allow" with no redactions and no
-// diagnostic. That is the same unredactable-to-client class as the streaming and
-// non-JSON cases, reached by response shape instead of by content-type.
+// Kinds are returned even alongside an error, because the walk mutates parsed IN
+// PLACE: those redactions really are applied to the map, so a caller that serves
+// a re-encoding of parsed must also record them.
 //
-// A marshal failure is also an error rather than a fallback to the original
-// bytes: returning originalBody after a finding would forward unredacted output
-// while the audit trail had already recorded a redaction.
-func redactResponse(parsed map[string]any, r redactor.Redactor, ev *audit.Event) ([]byte, error) {
+// A marshal failure is an error rather than a fallback to the original bytes:
+// serving the originals after a finding would forward unredacted output while the
+// trail recorded a redaction.
+func redactResponse(parsed map[string]any, r redactor.Redactor) ([]byte, []string, error) {
+	var kinds []string
+
 	raw, present := parsed["choices"]
 	if !present {
 		// No choices: nothing model-generated to inspect (e.g. an embeddings
 		// response). Not an error.
-		return marshalMap(parsed)
+		body, err := marshalMap(parsed)
+		return body, nil, err
 	}
 	choices, ok := raw.([]any)
 	if !ok {
-		return nil, errUninspectableResponseShape
+		return nil, nil, errUninspectableResponseShape
 	}
 	for _, c := range choices {
 		choice, ok := c.(map[string]any)
 		if !ok {
-			return nil, errUninspectableResponseShape
+			return nil, kinds, errUninspectableResponseShape
 		}
 		// Each of these containers may hold model output; every one must be
 		// either absent or an object we can walk.
 		for _, key := range []string{"message", "delta"} {
-			if v, p := choice[key]; p {
-				container, ok := v.(map[string]any)
-				if !ok && v != nil {
-					return nil, errUninspectableResponseShape
-				}
-				if ok {
-					if err := redactContentField(container, r, ev); err != nil {
-						return nil, err
-					}
-				}
+			v, p := choice[key]
+			if !p || v == nil {
+				continue
+			}
+			container, ok := v.(map[string]any)
+			if !ok {
+				return nil, kinds, errUninspectableResponseShape
+			}
+			found, err := redactContentField(container, r)
+			kinds = append(kinds, found...)
+			if err != nil {
+				return nil, kinds, err
 			}
 		}
-		// Legacy completions shape: choices[].text is the output directly.
+		// Legacy completions shape: choices[].text carries the output directly.
 		if v, p := choice["text"]; p {
-			if s, ok := v.(string); ok {
-				cleaned, kinds := r.Redact(s)
+			switch s := v.(type) {
+			case nil:
+				// No output in this choice.
+			case string:
+				cleaned, found := r.Redact(s)
 				choice["text"] = cleaned
-				for _, k := range kinds {
-					ev.Redactions = append(ev.Redactions, "resp:"+k)
+				for _, k := range found {
+					kinds = append(kinds, "resp:"+k)
 				}
-			} else if v != nil {
-				return nil, errUninspectableResponseShape
+			default:
+				return nil, kinds, errUninspectableResponseShape
 			}
 		}
 	}
-	return marshalMap(parsed)
+	body, err := marshalMap(parsed)
+	if err != nil {
+		return nil, kinds, err
+	}
+	return body, kinds, nil
 }
 
 // redactContentField redacts a message-or-delta container's "content" member in
-// place. Absent or null content is legitimate (tool-call turns, role-only
-// deltas); a string and a parts array are redacted; anything else is an
-// uninspectable shape.
-func redactContentField(container map[string]any, r redactor.Redactor, ev *audit.Event) error {
+// place and returns the kinds it redacted. Absent or null content is legitimate
+// (tool-call turns, role-only deltas); a string and a parts array are redacted;
+// anything else is an uninspectable shape.
+func redactContentField(container map[string]any, r redactor.Redactor) ([]string, error) {
 	v, present := container["content"]
 	if !present || v == nil {
-		return nil
+		return nil, nil
 	}
+	var kinds []string
 	switch c := v.(type) {
 	case string:
-		cleaned, kinds := r.Redact(c)
+		cleaned, found := r.Redact(c)
 		container["content"] = cleaned
-		for _, k := range kinds {
-			ev.Redactions = append(ev.Redactions, "resp:"+k)
+		for _, k := range found {
+			kinds = append(kinds, "resp:"+k)
 		}
-		return nil
+		return kinds, nil
 	case []any:
 		for _, pt := range c {
 			part, ok := pt.(map[string]any)
 			if !ok {
-				return errUninspectableResponseShape
+				return kinds, errUninspectableResponseShape
 			}
 			s, present := part["text"]
 			if !present || s == nil {
@@ -509,24 +574,20 @@ func redactContentField(container map[string]any, r redactor.Redactor, ev *audit
 			}
 			text, ok := s.(string)
 			if !ok {
-				return errUninspectableResponseShape
+				return kinds, errUninspectableResponseShape
 			}
-			cleaned, kinds := r.Redact(text)
+			cleaned, found := r.Redact(text)
 			part["text"] = cleaned
-			for _, k := range kinds {
-				ev.Redactions = append(ev.Redactions, "resp:"+k)
+			for _, k := range found {
+				kinds = append(kinds, "resp:"+k)
 			}
 		}
-		return nil
+		return kinds, nil
 	default:
-		return errUninspectableResponseShape
+		return kinds, errUninspectableResponseShape
 	}
 }
 
-// isSuccessfulStatus reports whether an upstream status code indicates a
-// successful response. The distinction is load-bearing in two places: a
-// SUCCESSFUL body the gateway cannot inspect must be refused, while an ERROR body
-// must be passed through because it is diagnostic rather than model output.
 func isSuccessfulStatus(code int) bool {
 	return code >= 200 && code < 300
 }
