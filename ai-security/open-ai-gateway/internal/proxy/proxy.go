@@ -5,6 +5,7 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -15,16 +16,6 @@ import (
 	"github.com/Schildkrote/open-ai-gateway/internal/ratelimit"
 	"github.com/Schildkrote/open-ai-gateway/internal/redactor"
 )
-
-type message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type chatRequest struct {
-	Model    string    `json:"model"`
-	Messages []message `json:"messages"`
-}
 
 // Gateway holds the dependencies for request handling.
 type Gateway struct {
@@ -62,18 +53,57 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req chatRequest
-	_ = json.Unmarshal(body, &req)
-	content := flatten(req.Messages)
+	// Parse the request as a generic map rather than a narrow struct. The old
+	// code did `_ = json.Unmarshal(body, &req)` into a chatRequest whose message
+	// content was typed `string`, and DISCARDED the error. OpenAI's multimodal
+	// form sends content as an array of parts:
+	//
+	//	{"role":"user","content":[{"type":"text","text":"..."}]}
+	//
+	// That unmarshal failed, req.Messages stayed empty, and content came out
+	// EMPTY - so policy ContentRe rules could not match and the redactor had
+	// nothing to redact. Verified against origin/main before fixing: a deny rule
+	// on "FORBIDDEN" returned 403 for plain string content but 200 for the same
+	// text in multimodal form, and an email address was forwarded upstream
+	// unredacted. That is a bypass-by-request-shape against a gateway whose
+	// whole purpose is policy enforcement and PII removal.
+	//
+	// Failing closed matters here: a body we cannot inspect must not be
+	// forwarded uninspected.
 	apiKey := extractKey(r)
 
-	ev := audit.Event{APIKey: maskKey(apiKey), Model: req.Model}
+	parsedReq, reqErr := decodeJSONObject(body)
+	if reqErr != nil {
+		g.log(audit.Event{APIKey: maskKey(apiKey), Action: "denied", Rule: "malformed-request",
+			Reason: "request body is not a JSON object; refusing to forward uninspected content"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error":  "request body must be a JSON object",
+			"detail": reqErr.Error(),
+		})
+		return
+	}
+	model := stringField(parsedReq, "model")
+	content, contentOK := extractContent(parsedReq)
+
+	ev := audit.Event{APIKey: maskKey(apiKey), Model: model}
 
 	// 1. Policy decision.
-	dec := g.Engine.Evaluate(policy.Request{Model: req.Model, Content: content, APIKey: apiKey})
+	dec := g.Engine.Evaluate(policy.Request{Model: model, Content: content, APIKey: apiKey})
 	ev.Action = string(dec.Action)
 	ev.Rule = dec.Rule
 	ev.Reason = dec.Reason
+
+	// If messages were present but we could not read them as text, we cannot
+	// honestly say the content was inspected. Fail closed rather than forward
+	// uninspected content past policy and redaction.
+	if !contentOK && hasMessages(parsedReq) {
+		g.log(ev)
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error":  "message content is not in a supported shape",
+			"detail": "expected a string or an array of {type:text,text:string} parts",
+		})
+		return
+	}
 
 	if dec.Action == policy.Deny {
 		g.log(ev)
@@ -91,21 +121,21 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Request redaction.
 	//
-	// This rewrites the ORIGINAL body as a generic map, not via the narrow
-	// chatRequest struct. RedactRequest defaults to true, so whenever anything
-	// was redacted the old code did `body, _ = json.Marshal(req)` — and req only
-	// models Model + Messages, which silently dropped every other field the
-	// client sent: stream, temperature, top_p, max_tokens, tools/tool_choice,
-	// response_format, stop, n. A streaming client would get a non-streaming
-	// upstream call back and tool-calling clients would lose their tool schema.
-	// A map round-trip preserves unknown fields and cannot drift when upstream
-	// adds one.
+	// Redaction rewrites the ORIGINAL body as a generic map rather than
+	// re-marshalling a narrow struct. RedactRequest defaults to true, so the old
+	// `body, _ = json.Marshal(req)` path silently dropped every field the client
+	// sent beyond model+messages: stream, temperature, top_p, max_tokens, stop,
+	// n, tools, tool_choice, response_format. A streaming client would receive a
+	// non-streaming upstream call and tool-calling clients would lose their tool
+	// schema, with no error anywhere.
+	//
+	// Content is redacted IN PLACE per message/per text part, never by writing
+	// one flattened string back into a single message: flattening would destroy a
+	// multimodal message's image parts and collapse several messages into one, so
+	// what reached upstream would no longer mean what the client sent.
 	if g.RedactRequest || dec.Action == policy.Redact {
-		redacted, kinds := g.redactor().Redact(content)
-		if len(kinds) > 0 {
-			if rewritten, ok := redactRequestBody(body, redacted); ok {
-				body = rewritten
-			}
+		if rewritten, kinds, ok := redactRequestContent(parsedReq, g.redactor()); ok {
+			body = rewritten
 			ev.Redactions = append(ev.Redactions, kinds...)
 		}
 	}
@@ -252,58 +282,150 @@ func (g *Gateway) log(e audit.Event) {
 	}
 }
 
-func flatten(msgs []message) string {
-	parts := make([]string, 0, len(msgs))
-	for _, m := range msgs {
-		parts = append(parts, m.Content)
-	}
-	return strings.Join(parts, "\n")
-}
+// errNotJSONObject is returned for a body that is valid JSON but not an object
+// (e.g. "null"), which would otherwise decode to a nil map and look parseable.
+var errNotJSONObject = errors.New("body is not a JSON object")
 
-// redactRequestBody rewrites the original request body as a generic map so that
-// every field the client sent survives so every field the client sent
-// survives (stream, temperature, max_tokens, tools, ...). It reports ok=false
-// when the body is not a JSON object or has no rewritable messages, in which
-// case the caller keeps the original bytes rather than sending a mangled body.
-func redactRequestBody(body []byte, redacted string) ([]byte, bool) {
+// decodeJSONObject parses a request body as a JSON object. Anything else
+// (array, scalar, malformed JSON) is an error: the gateway must not forward a
+// body it cannot inspect.
+func decodeJSONObject(body []byte) (map[string]any, error) {
 	var parsed map[string]any
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, false
+		return nil, err
 	}
-	msgs, ok := parsed["messages"].([]any)
-	if !ok || len(msgs) == 0 {
-		return nil, false
+	if parsed == nil {
+		return nil, errNotJSONObject
 	}
+	return parsed, nil
+}
 
-	// Selection rule: the last message with role "user", else the final
-	// message. This is deliberately unchanged from the pre-map implementation.
-	target := -1
-	for i := len(msgs) - 1; i >= 0; i-- {
-		m, ok := msgs[i].(map[string]any)
+// stringField reads a string member, returning "" when absent or non-string.
+func stringField(m map[string]any, key string) string {
+	if s, ok := m[key].(string); ok {
+		return s
+	}
+	return ""
+}
+
+// hasMessages reports whether the request carried a non-empty messages array.
+func hasMessages(m map[string]any) bool {
+	msgs, ok := m["messages"].([]any)
+	return ok && len(msgs) > 0
+}
+
+// extractContent flattens every message's TEXT into one string for policy
+// matching and redaction, and reports whether every shape it saw was understood.
+//
+// It handles the three content shapes OpenAI-compatible clients actually send:
+//   - "content": "text"                              (plain string)
+//   - "content": [{"type":"text","text":"..."}, ...] (multimodal parts)
+//   - "content": null                                (tool-call turns)
+//
+// Returning ok=false for an unrecognised shape is load-bearing: the caller fails
+// closed rather than forwarding content that policy and redaction never saw.
+// The previous implementation typed content as a plain string and discarded the
+// unmarshal error, so multimodal requests produced EMPTY content and silently
+// bypassed both.
+func extractContent(m map[string]any) (string, bool) {
+	msgs, ok := m["messages"].([]any)
+	if !ok {
+		// No messages array: nothing textual to inspect. Not an error (this can
+		// be an embeddings-style body), just no content.
+		return "", true
+	}
+	parts := make([]string, 0, len(msgs))
+	for _, raw := range msgs {
+		msg, ok := raw.(map[string]any)
+		if !ok {
+			return "", false
+		}
+		switch c := msg["content"].(type) {
+		case nil:
+			// Tool-call / assistant turns legitimately carry no content.
+			continue
+		case string:
+			parts = append(parts, c)
+		case []any:
+			// Multimodal parts: inspect every text part. Image and other
+			// non-text parts are skipped, but their presence is not an error.
+			for _, pt := range c {
+				part, ok := pt.(map[string]any)
+				if !ok {
+					return "", false
+				}
+				if v, present := part["text"]; present {
+					s, ok := v.(string)
+					if !ok {
+						return "", false
+					}
+					parts = append(parts, s)
+				}
+			}
+		default:
+			// Number, bool, object: content we cannot read as text.
+			return "", false
+		}
+	}
+	return strings.Join(parts, "\n"), true
+}
+
+// redactRequestContent redacts sensitive text throughout the request's messages
+// IN PLACE, preserving every other field and the original content shape.
+//
+// It rewrites string content, and each {type:text,text:...} part of a multimodal
+// content array (image and other non-text parts are left untouched).
+//
+// It returns ok=false only when nothing sensitive was found or the body cannot
+// be re-marshalled, in which case the caller keeps the ORIGINAL bytes. That is
+// safe because extractContent has already run and failed closed on any shape
+// this function does not understand, so an unrecognised shape cannot reach here
+// and be forwarded unredacted.
+func redactRequestContent(parsed map[string]any, r redactor.Redactor) ([]byte, []string, bool) {
+	msgs, ok := parsed["messages"].([]any)
+	if !ok {
+		return nil, nil, false
+	}
+	var kinds []string
+	for _, raw := range msgs {
+		msg, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
-		if role, _ := m["role"].(string); role == "user" {
-			target = i
-			break
+		switch c := msg["content"].(type) {
+		case string:
+			cleaned, found := r.Redact(c)
+			if len(found) > 0 {
+				msg["content"] = cleaned
+				kinds = append(kinds, found...)
+			}
+		case []any:
+			for _, pt := range c {
+				part, ok := pt.(map[string]any)
+				if !ok {
+					continue
+				}
+				s, ok := part["text"].(string)
+				if !ok {
+					continue
+				}
+				cleaned, found := r.Redact(s)
+				if len(found) > 0 {
+					part["text"] = cleaned
+					kinds = append(kinds, found...)
+				}
+			}
 		}
 	}
-	if target < 0 {
-		target = len(msgs) - 1
+	if len(kinds) == 0 {
+		return nil, nil, false
 	}
-	tm, ok := msgs[target].(map[string]any)
-	if !ok {
-		return nil, false
-	}
-	tm["content"] = redacted
-
 	out, err := json.Marshal(parsed)
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
-	return out, true
+	return out, kinds, true
 }
-
 func extractKey(r *http.Request) string {
 	if k := r.Header.Get("X-API-Key"); k != "" {
 		return k
