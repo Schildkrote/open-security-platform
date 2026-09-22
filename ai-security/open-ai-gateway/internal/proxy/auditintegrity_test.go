@@ -378,6 +378,22 @@ func TestAuditMasksKeyOnTheRemainingEarlyReturnPaths(t *testing.T) {
 // unredacted bytes. Pinned at FUNCTION level here so the guard is not silently
 // deletable, with the reachability limit stated rather than glossed.
 //
+// The unreachability was VERIFIED rather than assumed, because "defensive code
+// nothing can reach" is exactly the shape of a claim that hides a real hole:
+//   - encoding/json REJECTS the NaN / Infinity / -Infinity literals at decode
+//     time ("invalid character 'N' looking for beginning of value"), so upstream
+//     JSON cannot introduce them.
+//   - it also REJECTS numbers that would overflow float64 ("cannot unmarshal
+//     number 1e400 into Go value of type float64"), so no literal can decode to
+//     an Inf either. 1e308 decodes fine and re-marshals fine.
+//   - the Redactor interface returns (string, []string) and the result is stored
+//     back into a string field, so a redactor cannot inject a non-marshalable
+//     value.
+//
+// What remains reachable is a FUTURE change: decoding into a typed struct with a
+// float that arithmetic then sets to NaN, or a redactor interface that grows a
+// non-string return. That is what this guard is for.
+//
 // Mutation B5 ("if marshalErr != nil" -> "&& false") SURVIVED the suite, which is
 // exactly what an unreachable branch does. This test converts that survivor from
 // a blind spot into a documented one.
