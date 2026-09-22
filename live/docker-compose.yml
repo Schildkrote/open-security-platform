@@ -138,9 +138,18 @@ services:
       - wazuh_wodles:/var/ossec/wodles
       - wazuh_filebeat_etc:/etc/filebeat
       - wazuh_filebeat_var:/var/lib/filebeat
-      - ./config/wazuh/certs/root-ca-manager.pem:/etc/ssl/root-ca.pem:ro
+      # The image generates /etc/filebeat/filebeat.yml at first boot with
+      #   ssl.certificate_authorities: ['/etc/ssl/root-ca.pem']
+      #   ssl.certificate:               '/etc/ssl/filebeat.pem'
+      #   ssl.key:                       '/etc/ssl/filebeat.key'
+      # so the mount targets must match those names exactly. The key was
+      # previously mounted as filebeat-key.pem, which made filebeat abort with
+      # "open /etc/ssl/filebeat.key: no such file or directory" and took the
+      # whole wazuh container down (s6 exits after filebeat fails), even though
+      # the healthcheck had already reported healthy.
+      - ./config/wazuh/certs/root-ca.pem:/etc/ssl/root-ca.pem:ro
       - ./config/wazuh/certs/wazuh.manager.pem:/etc/ssl/filebeat.pem:ro
-      - ./config/wazuh/certs/wazuh.manager-key.pem:/etc/ssl/filebeat-key.pem:ro
+      - ./config/wazuh/certs/wazuh.manager-key.pem:/etc/ssl/filebeat.key:ro
       - ./config/wazuh/wazuh_manager.conf:/wazuh-config-mount/etc/ossec.conf:ro
     networks:
       osp:
@@ -163,7 +172,15 @@ services:
       POSTGRES_USER: ${DD_DATABASE_USER}
       POSTGRES_PASSWORD: ${DD_DATABASE_PASSWORD}
     volumes:
-      - defectdojo_postgres_data:/var/lib/postgresql/data
+      # postgres:18 changed the expected layout: data now lives in a PGDATA
+      # subdirectory (/var/lib/postgresql/18/docker) rather than directly in
+      # /var/lib/postgresql/data. Mounting the volume at the old path made the
+      # container abort with "PostgreSQL data in /var/lib/postgresql/data
+      # (unused mount/volume)". Mounting at /var/lib/postgresql matches the
+      # image default and also leaves room for `pg_upgrade --link` on the next
+      # major version, which a mount-point boundary would otherwise block.
+      # See docker-library/postgres#37.
+      - defectdojo_postgres_data:/var/lib/postgresql
     networks:
       osp:
         aliases: [defectdojo-postgres.osp.local]
@@ -291,7 +308,13 @@ services:
         aliases: [defectdojo.osp.local]
     healthcheck:
       # nginx:alpine base => busybox wget available, curl not guaranteed.
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/login/ || exit 1"]
+      # Path must be one that returns 2xx/3xx WITHOUT the trailing slash: this
+      # DefectDojo build serves /login?next=/ (200) and answers /login/ with
+      # 404, so probing "/login/" left the container permanently unhealthy
+      # even though the app was serving fine (/ -> 302, /api/v2/ -> 403).
+      # wget --spider follows the 302 from / to the login page, so probing "/"
+      # validates the whole nginx -> uwsgi -> Django chain.
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/ || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 12
