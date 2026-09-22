@@ -60,6 +60,22 @@ legend. Only the integration-spine subset (`ai-redteam-platform` →
 `pentest-manager` → `ai-compliance-hub` + `open-pam-jit`/`agent-sandbox`, and
 `oiaf` as spine producer) is proven end-to-end today.
 
+### Proving the Mock→Real seam locally
+
+[`live/`](live/README.md) is a self-contained proof harness that exercises the
+components' **Real** connector code paths — not their mocks — against local
+containerized instances of Keycloak, Wazuh, DefectDojo, OpenBao and Ollama. This
+is the part of the project that a unit test cannot cover: the seam where a
+component stops talking to an in-memory fake and starts talking to a real product
+over the network.
+
+It requires Docker plus `go`, `node` (>= 22.6), `python3`, `curl` and `openssl`
+on the host, and it is deliberately **excluded** from the root `make test` /
+`make verify` fan-out so offline CI stays offline. All published ports bind to
+**127.0.0.1 only**; credentials are random local-only values generated into
+`live/.env` (git-ignored) and real credentials must never be committed. See
+[`live/README.md`](live/README.md) for the proof scripts and the `make` targets.
+
 | Portfolio | Component(s) | Category it targets | Full comparison |
 |---|---|---|---|
 | identity/ | `open-pam-jit`, `agent-identity` | PAM/JIT access (Teleport, CyberArk, Britive), agent identity (Astrix, Aembit, SPIFFE) | [comparison-identity.md](docs/comparison-identity.md) |
