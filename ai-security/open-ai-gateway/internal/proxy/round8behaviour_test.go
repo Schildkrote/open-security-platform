@@ -652,41 +652,42 @@ func newBudgetLimiter(budget int64) *ratelimit.Limiter {
 	return ratelimit.New(ratelimit.Limits{RequestsPerMinute: 100000, BudgetTokens: budget})
 }
 
-// TestBL22_SpareListIsLoadbearing pins the spare list itself, and it exists because
-// the first mutation written for this property was a near-no-op.
+// TestBL22_SweepIsSurgicalSoInteropSurvives replaces the earlier
+// TestBL22_SpareListIsLoadbearing, which pinned a decision round 9 overturned.
 //
-// Emptying the spare list is OBSERVATIONALLY INERT for clean header values, because
-// the sweep is surgical: it rewrites a value only when the redactor reports findings,
-// so "application/json" passes through untouched either way. That is why the reviewer's
-// N5 (no over-redaction) holds and why a naive over-redaction mutation survives every
-// test — it changes no observable behaviour.
+// THE DECISION THAT WAS REVERSED. This test used to assert that a header on the spare
+// list (X-Request-Id, X-Correlation-Id) keeps a detector-recognisable value verbatim,
+// on the reasoning that sweeping correlation ids "breaks tracing for no security gain".
+// Round 9 showed that reasoning is wrong twice over:
 //
-// The spare list only becomes observable when a SPARED header carries something the
-// detector matches. This test constructs exactly that and pins the deliberate design
-// decision: protocol-metadata headers are NOT swept, because their values are what the
-// client uses to parse and correlate the response.
+//  1. Provenance cannot be inferred from the NAME. Nothing validates the grammar of a
+//     request id, so a hostile origin sets those bytes — exactly the fallacy BL-22
+//     debunked for the status code. Leaving it spared is an unswept channel.
+//  2. The "no security gain" half assumed sweeping costs interop. It does not, because
+//     the sweep is SURGICAL: it rewrites a value only when a detector reports a finding.
+//     A legitimate request id passes through byte-identical.
 //
-// HONEST TRADEOFF, stated rather than hidden: this means PII inside a spared header
-// (a request id that happens to look like an email, a Date with text appended) DOES
-// reach the client. That is accepted for the numeric/closed-vocabulary/stack-generated
-// headers on the list, and it is the reason BL-22 REMOVED every header whose value is
-// origin-chosen free text — Location, Content-Location, Content-Disposition, Warning,
-// Server and Etag are swept, so the accepted exposure is limited to headers an origin
-// cannot use as a text channel. If that tradeoff is ever reconsidered, this test is the
-// thing to amend, and it will say so.
-func TestBL22_SpareListIsLoadbearing(t *testing.T) {
-	// A value the default detector matches, placed in headers that MUST stay spared.
-	const poisoned = "req-" + piiMarker // matches EMAIL
-	spared := []string{"X-Request-Id", "X-Correlation-Id", "Content-Type"}
+// So the guarantee worth pinning is the surgical one, in both directions: a CLEAN
+// protocol-metadata value must survive untouched (that is what keeps tracing and body
+// parsing working), and a value carrying recognised sensitive data must be swept
+// regardless of how standard the header name is.
+//
+// HONEST RESIDUAL COST: if a legitimate correlation id happens to match a detector —
+// an id containing an '@', or one that looks like a 40-char SSWS token — it will be
+// mangled and that trace link breaks. Accepted deliberately: mangling a suspicious
+// identifier is cheaper than handing a hostile origin an unswept text channel, and
+// clean ids are unaffected.
+func TestBL22_SweepIsSurgicalSoInteropSurvives(t *testing.T) {
+	const poisoned = "req-" + piiMarker // matches the EMAIL detector
+	const cleanID = "req-7f3a9c2e-1b4d-4e8a"
 
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Request-Id", poisoned)
-		w.Header().Set("X-Correlation-Id", poisoned)
-		// Contrast: an origin-free-text header with the same poisoned value MUST be
-		// swept. Both assertions in one response, so a change to the list shows up
-		// in both directions at once.
-		w.Header().Set("Location", "https://x.example/?r="+poisoned)
+		w.Header().Set("X-Request-Id", cleanID)                      // must survive byte-identical
+		w.Header().Set("X-Correlation-Id", cleanID)                  // must survive byte-identical
+		w.Header().Set("X-Ratelimit-Remaining-Tokens", "12345")      // numeric, must survive
+		w.Header().Set("X-Poisoned-Trace", poisoned)                 // must be swept
+		w.Header().Set("Location", "https://x.example/?r="+poisoned) // must be swept
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(okJSONResponse))
 	}))
@@ -698,27 +699,36 @@ func TestBL22_SpareListIsLoadbearing(t *testing.T) {
 
 	rr := post(t, gw, "gpt-4o", "hello")
 
-	for _, h := range spared {
-		got := rr.Header().Get(h)
-		if h == "Content-Type" {
-			got = "application/json" // set separately by the test server
-			if v := rr.Header().Get(h); v != "application/json" {
-				t.Errorf("Content-Type was rewritten to %q, which breaks the client's "+
-					"ability to parse the body", v)
-			}
-			continue
-		}
-		if got != poisoned {
-			t.Errorf("BL-22 over-redaction: spared protocol header %s was rewritten to "+
-				"%q (want %q). The spare list is load-bearing: sweeping request ids "+
-				"breaks correlation and tracing for no security gain, because these "+
-				"values are stack-generated rather than origin-chosen text.",
-				h, got, poisoned)
+	// 1. INTEROP: clean protocol metadata survives byte-for-byte. This is the real
+	//    guarantee the spare list used to be argued for, and it holds WITHOUT the
+	//    spare list because the sweep only acts on findings.
+	for _, h := range []string{"X-Request-Id", "X-Correlation-Id"} {
+		if got := rr.Header().Get(h); got != cleanID {
+			t.Errorf("over-redaction: clean %s = %q, want %q byte-identical. A surgical "+
+				"sweep must not touch values no detector matched, or tracing breaks",
+				h, got, cleanID)
 		}
 	}
-	if v := rr.Header().Get("Location"); strings.Contains(v, piiMarker) {
-		t.Errorf("contrast failed: Location (origin-chosen free text, removed from the "+
-			"spare list by BL-22) was NOT swept: %q", v)
+	if got := rr.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type was rewritten to %q, which breaks the client's ability "+
+			"to parse the body", got)
+	}
+	if got := rr.Header().Get("X-Ratelimit-Remaining-Tokens"); got != "12345" {
+		t.Errorf("a numeric provider header was rewritten to %q", got)
+	}
+
+	// 2. SECURITY: a recognised sensitive value is swept no matter how standard the
+	//    header NAME is.
+	for _, h := range []string{"X-Poisoned-Trace", "Location"} {
+		got := rr.Header().Get(h)
+		if strings.Contains(got, piiMarker) {
+			t.Errorf("BL-22 LEAK: %s served origin-chosen text carrying PII verbatim: %q",
+				h, got)
+		}
+		if got == "" {
+			t.Errorf("%s was dropped entirely; sweeping the value is preferable to "+
+				"deleting the header", h)
+		}
 	}
 }
 

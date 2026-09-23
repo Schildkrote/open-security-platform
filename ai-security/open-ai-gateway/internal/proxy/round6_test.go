@@ -548,11 +548,34 @@ func TestBL12_StandardHeadersSparedUnknownHeadersSwept(t *testing.T) {
 	// upstream can hide a credential — so the assumption is false for it. Same for
 	// Location, Content-Location, Content-Disposition (a filename!), Warning and Server.
 	// Removing a name from a SPARE list means MORE sweeping, so the change is fail-safe.
-	for _, h := range []string{"Content-Type", "Content-Length", "Date", "Cache-Control",
-		"Last-Modified", "X-Request-Id", "Strict-Transport-Security"} {
+	// Round 9 cut this list hard, and these two tests used to pin the old, larger one.
+	// The criterion is now: spare ONLY headers whose value is numeric, date-grammar, or
+	// a closed vocabulary the origin cannot extend with arbitrary text. Inferring a
+	// value's provenance from the header NAME was the same fallacy BL-22 debunked for
+	// the STATUS CODE — nothing validates the grammar of a Content-Type boundary
+	// parameter or an X-Request-Id, so a hostile origin sets those bytes.
+	//
+	// The interop guarantee that actually matters is preserved by the clean-value
+	// control below: the sweep is SURGICAL, so a legitimate value passes through
+	// byte-identical. Content-Type: application/json still reaches the client intact,
+	// which is what a client needs to parse the body.
+	for _, h := range []string{"Content-Length", "Date", "Last-Modified",
+		"Strict-Transport-Security", "X-Frame-Options", "Access-Control-Allow-Origin"} {
 		if isNonStandardHeader(http.CanonicalHeaderKey(h)) {
-			t.Errorf("%s was classified non-standard and would be swept; it is protocol "+
-				"metadata the client needs", h)
+			t.Errorf("%s was classified non-standard and would be swept; its value is "+
+				"numeric, date-grammar or a closed vocabulary, so sweeping it can only "+
+				"break the protocol", h)
+		}
+	}
+	// And the round-9 direction: headers the origin can put arbitrary text in are now
+	// swept, even when their NAME is standard HTTP vocabulary.
+	for _, h := range []string{"Content-Type", "Cache-Control", "X-Request-Id",
+		"X-Correlation-Id", "Via", "Vary", "Retry-After", "Cf-Ray",
+		"Openai-Organization", "X-Ratelimit-Remaining-Tokens"} {
+		if !isNonStandardHeader(http.CanonicalHeaderKey(h)) {
+			t.Errorf("BL-22/R9 regression: %s is back on the spare list. Its value is "+
+				"origin-chosen free text, so sparing it leaves an unswept channel — and "+
+				"because the sweep is surgical, sweeping it costs nothing for clean values", h)
 		}
 	}
 	// And the BL-22 direction: these standard headers carry origin-chosen free text or
