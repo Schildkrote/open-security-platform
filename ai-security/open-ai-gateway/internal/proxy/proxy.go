@@ -12,6 +12,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,19 +61,53 @@ func (g *Gateway) redactor() redactor.Redactor {
 //
 // Redirects are refused outright instead: a model-completion endpoint has no
 // legitimate reason to redirect, and http.ErrUseLastResponse surfaces the 3xx to
-// the caller, which then fails closed. An injected Client is used as given so
-// tests (and callers that genuinely want redirect handling) keep control.
+// the caller, which then fails closed.
 var noFollowClient = &http.Client{
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		return http.ErrUseLastResponse
-	},
+	CheckRedirect: noFollowRedirect,
 }
 
+// noFollowRedirect surfaces the redirect response instead of following it, so the
+// gateway can treat a 3xx like any other upstream response — sweep its Location
+// before auditing (BL-16) and serve it to the client — rather than silently
+// re-issuing a credentialed request to an attacker-chosen host.
+func noFollowRedirect(req *http.Request, via []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
+// client returns the HTTP client used for upstream calls.
+//
+// BL-21: an INJECTED client is wrapped so it cannot silently re-open BL-16.
+// Previously this returned g.Client verbatim and the refusal lived only in
+// noFollowClient, so any caller setting a natural `&http.Client{}` got default
+// redirect-following behaviour back, credential exfiltration included. Gateway and
+// its Authorize hook are both exported, which makes this a live API hazard rather
+// than a theoretical one — the previous comment claimed an injected client was
+// "used as given so tests keep control", and that claim was false: no test or call
+// site in this repo sets Client at all, so the field guarded nothing while silently
+// disabling a security control. The reviewer reproduced a custom client forwarding
+// BOTH Authorization and X-Api-Key verbatim to a collector after a 307 (Go strips
+// only Authorization cross-host, and only since 1.19).
+//
+// The caller's Transport, Timeout, Jar and every other field are preserved — only
+// CheckRedirect is imposed, and only when the caller left it nil. A caller who
+// genuinely wants redirect handling opts in explicitly by supplying their own
+// CheckRedirect, which is a deliberate decision rather than an accident of an unset
+// field. Fail-safe by default: forgetting to configure redirects must not mean
+// "follow them".
 func (g *Gateway) client() *http.Client {
-	if g.Client != nil {
+	if g.Client == nil {
+		return noFollowClient
+	}
+	if g.Client.CheckRedirect != nil {
+		// Explicit opt-in: the caller asked for specific redirect handling and owns
+		// the consequence.
 		return g.Client
 	}
-	return noFollowClient
+	// Shallow copy so the caller's client is not mutated behind their back and
+	// repeated calls do not re-wrap it.
+	wrapped := *g.Client
+	wrapped.CheckRedirect = noFollowRedirect
+	return &wrapped
 }
 
 // ServeHTTP implements the gateway decision pipeline.
@@ -499,6 +534,39 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// error response is not a billable completion, so zero tokens here is
 			// correct rather than a bypass.
 			setMeta(&ev, "usage", "unparseable")
+		} else {
+			// BL-20b: with response redaction OFF this branch was skipped entirely,
+			// so a non-JSON completion was served with NO accounting entry at all —
+			// neither a usage figure nor the "unparseable" diagnostic. The audit
+			// record simply omitted the fact that accounting was impossible, which is
+			// the exact "an exemption that leaves no diagnostic is indistinguishable
+			// from a silent hole" principle this branch already applies to opaque
+			// binaries (BL-9). Record it regardless of the redaction setting.
+			setMeta(&ev, "usage", "unparseable")
+		}
+
+		// BL-20 (non-JSON twin): charge an estimate here too, and deliberately NOT
+		// gated on g.RedactResponse. The budget and the redactor are independent
+		// guarantees; gating accounting on a redaction setting is precisely how the
+		// reviewer's TestR8_VULN_NonJSONBodyBypassesBudgetWithRedactionOff worked —
+		// turn redaction off and the bypass reappears. A non-JSON 2xx is a completion
+		// the client will act on, so it is billable; the estimate is the only figure
+		// available. See the JSON-path comment for why estimation beats refusal.
+		if isSuccessfulStatus(resp.StatusCode) {
+			est := estimateTokens(respBody)
+			ev.Tokens = est
+			setMeta(&ev, "usage", "estimated")
+			if !g.Limiter.RecordUsage(apiKey, est) {
+				setMeta(&ev, "budget", "exceeded")
+				ev.Action = "denied"
+				ev.Rule = "token-budget-exceeded"
+				ev.Reason = "estimated usage for an unaccounted completion exceeded the configured cumulative token budget"
+				g.log(ev)
+				writeJSON(w, http.StatusTooManyRequests, map[string]any{
+					"error": "token budget exceeded",
+				})
+				return
+			}
 		}
 	} else {
 		if g.RedactResponse {
@@ -547,6 +615,73 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// No usable usage figure: say so in the audit record instead of
 			// recording zero and letting a budget look unconsumed.
 			setMeta(&ev, "usage", "unparseable")
+
+			// BL-20: charge an ESTIMATE rather than recording zero. Omitting `usage`
+			// is entirely within the upstream's control, so before this a
+			// hostile-or-compromised provider defeated the cumulative token budget by
+			// simply never sending a usage figure — the reviewer measured 5/5
+			// requests served 200 against BudgetTokens=100 with `tokens recorded=0`,
+			// which is the non-streaming twin of the BL-15b streaming bypass whose
+			// own comment states the principle ("an unaccountable completion under an
+			// active budget is a bypass").
+			//
+			// WHY ESTIMATE AND NOT REFUSE. Refusing an unaccountable completion is the
+			// stricter option and it is WRONG HERE, for three reasons I verified
+			// rather than assumed:
+			//   1. BudgetTokens defaults to 1_000_000 in internal/config/config.go
+			//      and is not exposed via env or flag, so a budget is ACTIVE IN THE
+			//      DEFAULT CONFIGURATION. A refusal would therefore break the gateway
+			//      out of the box.
+			//   2. Many real providers legitimately omit `usage` on some responses.
+			//      Turning that into a 502 trades a bounded accounting gap for a
+			//      broken primary function.
+			//   3. It broke 42 existing tests, including
+			//      TestChokepointInvariantAcrossTheWholeShapeSpace — the 1106-case
+			//      shape sweep that is this branch's core security guarantee. A fix
+			//      that disables the suite protecting the chokepoint is not a fix.
+			//
+			// Estimating keeps both properties that matter: the completion still
+			// reaches the client (no functional regression), and consumption is still
+			// CHARGED, so the budget bounds spend approximately instead of not at all.
+			// The audit record says `"usage":"estimated"` rather than `"unparseable"`
+			// so nobody mistakes the figure for a real one — the BL-9 principle that
+			// an exemption must leave a diagnostic.
+			//
+			// GATED ON SUCCESS. Only a 2xx is a billable completion. An upstream 429
+			// or 500 whose body happens to be JSON without a usage figure is an ERROR,
+			// not work the caller received, so it must not be charged — that is the
+			// invariant the pre-BL-20 code stated outright ("an error response is not a
+			// billable completion, so zero tokens here is correct rather than a
+			// bypass") and which a first cut of this fix broke by estimating at every
+			// status. Billing for a failed request would make the budget punish clients
+			// for upstream errors, which is its own kind of lie.
+			//
+			// This is ACCOUNTING, not a security decision on the status code, so it does
+			// not reintroduce the antipattern rounds 1-5 were rejected for: redaction
+			// above ran regardless of status, and what the status decides here is only
+			// whether the caller consumed something billable.
+			if isSuccessfulStatus(resp.StatusCode) {
+				est := estimateTokens(respBody)
+				ev.Tokens = est
+				setMeta(&ev, "usage", "estimated")
+				if !g.Limiter.RecordUsage(apiKey, est) {
+					// Post-flight enforcement, same shape as the real-usage path below.
+					// Nothing has been written to w yet.
+					setMeta(&ev, "budget", "exceeded")
+					ev.Action = "denied"
+					ev.Rule = "token-budget-exceeded"
+					ev.Reason = "estimated usage for an unaccounted completion exceeded the configured cumulative token budget"
+					g.log(ev)
+					writeJSON(w, http.StatusTooManyRequests, map[string]any{
+						"error": "token budget exceeded",
+					})
+					return
+				}
+			} else {
+				// Diagnostic, not billable: record that no figure was available and
+				// charge nothing.
+				setMeta(&ev, "usage", "unparseable")
+			}
 		} else {
 			ev.Tokens = tokens
 			if !g.Limiter.RecordUsage(apiKey, tokens) {
@@ -895,22 +1030,96 @@ func allRequestStrings(parsed map[string]any) string {
 	return strings.Join(parts, "\n")
 }
 
-// isNonStandardHeader reports whether a canonical header name is NOT part of the
-// HTTP protocol vocabulary or a well-known provider interop header. BL-12 redacts
-// the values of everything this returns true for.
+// isNonStandardHeader reports whether a canonical header name should have its
+// VALUE swept. BL-12 redacts the values of everything this returns true for.
 //
 // The list is a POSITIVE list of names to SPARE. A negative list of names to
 // redact would be the enumeration mistake this branch exists to remove: any header
-// nobody thought of would fall through unswept. Sparing protocol vocabulary is
-// safe because those values are generated by the HTTP stack, not by a model.
+// nobody thought of would fall through unswept.
+//
+// BL-22 CORRECTS THE CRITERION THIS LIST USED TO APPLY. It spared any header that
+// was "part of the HTTP protocol vocabulary", on the stated assumption that such
+// values "are generated by the HTTP stack, not by a model". That assumption is
+// false for a whole class of standard headers whose values are ORIGIN-CHOSEN FREE
+// TEXT OR URIs. The reviewer reproduced a hostile upstream answering 200 with
+// `Location: https://attacker.example/collect?tok=<credential>` reaching the client
+// byte-for-byte — while the SAME header on a 3xx is swept by the BL-16 redirect
+// path, so the code already treats the value as dangerous and merely disagreed with
+// itself about which status makes it dangerous. A status the upstream also controls
+// cannot be the thing that decides whether its value is safe.
+//
+// So the criterion is now: spare a standard header ONLY if its value is genuinely
+// protocol metadata the origin cannot use to carry text — a number, a date, a
+// token from a closed vocabulary, or a stack-computed figure. Headers removed from
+// the spare list by this change, and why each one is origin-chosen free text:
+//
+//	Location           URI, origin-chosen. Has no legitimate meaning on a 2xx
+//	                   completion at all, so sweeping costs nothing real.
+//	Content-Location   URI, origin-chosen.
+//	Content-Disposition carries a FILENAME — free text, and a natural place for an
+//	                   upstream to hide PII or a credential.
+//	Warning            free-text human-readable message (deprecated, but still
+//	                   parseable and still attacker-settable).
+//	Server             origin-chosen product/version string; arbitrary bytes.
+//	Etag               opaque quoted string of the origin's choosing. Already
+//	                   dropped whenever the body is rewritten (validator logic),
+//	                   but otherwise copied verbatim — and it can carry a token.
+//
+// Deliberately STILL SPARED, because sweeping them would break interop for no
+// security gain: the closed-vocabulary and numeric/date headers (Content-Type,
+// Content-Length, Content-Encoding, Content-Language, Content-Range, Date, Expires,
+// Age, Cache-Control, Pragma, Vary, Via, Allow, Accept-Ranges, Retry-After,
+// Trailer, Transfer-Encoding, Last-Modified), the conditional-validator request
+// echoes (If-None-Match, If-Modified-Since), the CORS and security-policy headers
+// (whose values are constrained vocabularies), the correlation/request IDs and
+// provider ratelimit and telemetry headers (opaque stack-generated figures whose
+// mangling breaks tracing), and the CDN hop markers (Cf-Ray, Cf-Cache-Status).
+//
+// The direction of this change is fail-safe: removing a name from a SPARE list
+// means MORE sweeping, never less.
+// estimateTokens derives a conservative token estimate from a response body when
+// the upstream withheld its own usage figure (BL-20). It exists so that omitting
+// `usage` cannot make a completion free against the cumulative token budget.
+//
+// It is an APPROXIMATION and is recorded in the audit trail as `"usage":"estimated"`
+// so nobody mistakes it for a real figure. The heuristic charges for the whole
+// response body at roughly one token per 4 bytes, which is the widely used
+// order-of-magnitude ratio for English text, plus a floor of 1 so a tiny body is
+// never charged as zero.
+//
+// Two properties are deliberately favoured over accuracy:
+//
+//   - MONOTONIC: a bigger body always costs at least as much as a smaller one, so a
+//     provider cannot shrink its bill by reformatting.
+//   - CONSERVATIVE: over-charging by a small factor is a bounded, visible
+//     accounting error that an operator can raise the budget for; under-charging to
+//     zero is the bypass this closes.
+//
+// It is NOT a substitute for real usage accounting — when `usage` is present,
+// totalTokens() reads the provider's own figure and this is not called.
+func estimateTokens(body []byte) int64 {
+	const bytesPerToken = 4
+	n := int64(len(body)) / bytesPerToken
+	if n < 1 {
+		n = 1
+	}
+	if n > math.MaxInt32 {
+		// A 32 MiB body (maxBodyBytes) cannot approach this, but clamping keeps the
+		// figure sane for any future caller and cannot overflow the budget
+		// accumulator.
+		n = math.MaxInt32
+	}
+	return n
+}
+
 func isNonStandardHeader(canonical string) bool {
 	switch canonical {
 	case "Content-Type", "Content-Length", "Content-Encoding", "Content-Language",
-		"Content-Range", "Content-Disposition", "Content-Location",
-		"Date", "Server", "Cache-Control", "Pragma", "Expires", "Age",
-		"Vary", "Via", "Warning", "Allow", "Location",
+		"Content-Range",
+		"Date", "Cache-Control", "Pragma", "Expires", "Age",
+		"Vary", "Via", "Allow",
 		"Accept-Ranges", "Retry-After", "Trailer", "Transfer-Encoding",
-		"Last-Modified", "Etag", "If-None-Match", "If-Modified-Since",
+		"Last-Modified", "If-None-Match", "If-Modified-Since",
 		"Access-Control-Allow-Origin", "Access-Control-Allow-Credentials",
 		"Access-Control-Allow-Headers", "Access-Control-Allow-Methods",
 		"Access-Control-Expose-Headers", "Access-Control-Max-Age",
@@ -1112,6 +1321,65 @@ var auditSafeMetaKeys = []string{"panic_type"}
 //
 // Returns true when every field was swept cleanly. A false return means the
 // event's Model/Reason/Meta could NOT be verified clean and must not be written.
+// auditSweepExempt names the audit.Event fields that are DELIBERATELY not swept.
+//
+// Every other string-bearing field is swept by default. That direction is the whole
+// point of this list, and it is why BL-18 was a blocker: the previous version of
+// sweepAuditText hardcoded Model, Reason and Meta by name, so it swept exactly the
+// three fields its author remembered. audit.Event has eleven. Adding a twelfth —
+// say a `Detail string` populated from an upstream error body — would flow straight
+// into the tamper-evident log unswept, and nothing would fail: no compile error, no
+// test, no runtime signal. That is precisely the rounds-1-to-5 failure mode (an
+// enumerated list, one entry behind reality) reappearing inside the commit whose
+// message claimed to escape enumeration.
+//
+// So the sweep is derived by reflection and this list is the EXEMPTION set, not the
+// inclusion set. A new field is swept automatically unless someone adds it here and
+// justifies it. TestBL18_ExemptFieldListIsStillAccurate fails if an exempt name no
+// longer exists on the struct, so the list cannot rot into exempting fields that
+// were renamed away while real ones get swept twice.
+var auditSweepExempt = map[string]string{
+	// Gateway-generated from a CLOSED vocabulary the attacker cannot extend with
+	// content. Sweeping Action would turn "allow"/"deny" into "[REDACTED]" and make
+	// every record unfilterable, which destroys the trail's entire purpose.
+	"Action": "closed vocabulary (allow/deny/rate_limited/...); sweeping it makes records unfilterable",
+	// Rule names come from operator configuration, not from the request or the
+	// upstream. An operator who names a rule after PII has a configuration problem
+	// the gateway cannot solve by mangling its own vocabulary.
+	"Rule": "operator-configured rule id; not attacker-controlled",
+	// Timestamp, set by the gateway.
+	"Time": "gateway-generated timestamp",
+	// Already masked by maskKey at every construction site, and sweeping a masked
+	// key would destroy the attribution that identifies which caller a record
+	// belongs to. Pinned by TestAuditNeverContainsTheRawAPIKey.
+	"APIKey": "masked at every construction site by maskKey",
+	// Chain-integrity fields. Sweeping them would break hash continuity and the
+	// tamper-evidence property itself, and they are gateway-computed hashes rather
+	// than text.
+	"PrevHash": "chain linkage, gateway-computed",
+	"Hash":     "chain integrity, gateway-computed",
+	// Redactions is the OUTPUT of the sweep — the kinds it recorded. Sweeping its
+	// own accumulator would corrupt the finding list mid-traversal.
+	"Redactions": "the sweep's own output accumulator",
+	// Tokens is an int64 accounting figure, not text.
+	"Tokens": "numeric, cannot carry text",
+}
+
+// sweepAuditText redacts every text-bearing field of an audit event before it can
+// be written. It is the single chokepoint for audit egress: every path in ServeHTTP
+// logs through g.log, and g.log calls this before handing the event to the chain.
+//
+// The field set is DERIVED BY REFLECTION, not enumerated, so that adding a field to
+// audit.Event cannot silently create an unswept egress channel. See
+// auditSweepExempt for the deliberately exempt fields and the reasoning per field.
+//
+// ok is false when the redactor could not be trusted (it panicked), in which case
+// g.log drops the free text rather than writing it raw. The recover here is
+// load-bearing: g.log is called from the handler's panic-recovery defer, and the
+// thing that panicked is very often the Redactor itself, so sweeping with it would
+// panic a second time INSIDE the recovery handler and abort the deferred write —
+// losing the one audit record whose purpose is to say a request was processed and
+// something blew up.
 func sweepAuditText(g *Gateway, e *audit.Event) (ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1119,17 +1387,54 @@ func sweepAuditText(g *Gateway, e *audit.Event) (ok bool) {
 		}
 	}()
 	c := &sweepCtx{r: g.redactor(), prefix: "audit"}
-	if s, isStr := sweepValue(e.Model, c).(string); isStr {
-		e.Model = s
-	}
-	if s, isStr := sweepValue(e.Reason, c).(string); isStr {
-		e.Reason = s
-	}
-	if e.Meta != nil {
-		if m, isMap := sweepValue(e.Meta, c).(map[string]any); isMap {
-			e.Meta = m
+
+	// Walk the struct by reflection. Settable string and composite fields are
+	// swept; exempt and non-text fields are skipped with their reason recorded in
+	// the map above so the decision is reviewable.
+	v := reflect.ValueOf(e).Elem()
+	typ := v.Type()
+	for i := 0; i < typ.NumField(); i++ {
+		name := typ.Field(i).Name
+		if _, exempt := auditSweepExempt[name]; exempt {
+			continue
 		}
+		f := v.Field(i)
+		if !f.CanSet() {
+			// An unexported field cannot be swept and cannot be marshalled either,
+			// so it is not an egress channel. Fail closed anyway: if a future field
+			// is unexported but somehow serializable, the tripwire test catches it.
+			continue
+		}
+		swept := sweepValue(f.Interface(), c)
+
+		// Assign through reflection ONLY when the swept value is genuinely
+		// assignable back to the field. Two ways this can fail, and both must not
+		// become a panic:
+		//
+		//   - sweepValue returns an untyped nil for a nil input, and
+		//     reflect.ValueOf(nil) is the INVALID Value; calling Set with it panics.
+		//     A nil Meta is the common case (most events carry no Meta), so without
+		//     this guard EVERY ordinary event would panic, be recovered, and take
+		//     the fail-safe branch — dropping Model and Reason on all of them. That
+		//     is a silent, total degradation of the audit trail dressed up as
+		//     "working".
+		//   - a future field whose type sweepValue does not preserve would not be
+		//     assignable either.
+		//
+		// On either failure the field is DROPPED (zeroed) rather than left holding
+		// unswept text, which is the same fail-safe direction g.log uses: losing a
+		// diagnostic is recoverable, leaking into a tamper-evident record is not.
+		rv := reflect.ValueOf(swept)
+		if !rv.IsValid() || !rv.Type().AssignableTo(f.Type()) {
+			f.Set(reflect.Zero(f.Type()))
+			continue
+		}
+		f.Set(rv)
 	}
+
+	// c.kinds are the finding labels produced during the walk; they are the audit
+	// trail's record of WHAT was redacted, and are appended to the exempt
+	// Redactions field rather than being swept themselves.
 	for _, k := range c.kinds {
 		e.Redactions = append(e.Redactions, k)
 	}

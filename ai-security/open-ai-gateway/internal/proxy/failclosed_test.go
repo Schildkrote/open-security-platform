@@ -277,13 +277,25 @@ func TestMissingUsageAuditedAsUnparseable(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("a valid response without usage should still succeed, got %d", rr.Code)
 	}
-	if !strings.Contains(buf.String(), `"usage":"unparseable"`) {
-		t.Errorf("missing usage was not recorded in the audit trail: %s", buf.String())
+	// BL-20 amended this pin. It used to require `"usage":"unparseable"` and zero
+	// tokens recorded, which is exactly the budget bypass round 8 reported: an
+	// upstream that omits `usage` gets its completion served free, forever, because
+	// `tokens recorded=0` never advances a cumulative budget. The guarantee that
+	// matters is preserved and tightened: the request still succeeds (a provider
+	// that legitimately omits usage must keep working), and the audit trail still
+	// states that the figure was not the provider's — now as "estimated" rather than
+	// "unparseable", because the gateway does charge an approximation.
+	if !strings.Contains(buf.String(), `"usage":"estimated"`) {
+		t.Errorf("a missing usage figure was not recorded as estimated in the audit "+
+			"trail (it must never be silently zero, which is the BL-20 bypass): %s",
+			buf.String())
 	}
 	toks, _ := gw.Limiter.Usage("test-key")
-	if toks != 0 {
-		t.Errorf("no usage was present, so nothing should have been recorded: %d", toks)
+	if toks <= 0 {
+		t.Errorf("BL-20 bypass: an unaccountable completion was charged %d tokens; it "+
+			"must be charged a positive estimate so the budget advances", toks)
 	}
+	t.Logf("charged %d estimated tokens for a body with no usage figure", toks)
 }
 
 // Numeric usage keeps working (the common case), so the string tolerance above did
@@ -323,7 +335,21 @@ func TestMalformedUsageStringAudited(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("a malformed usage figure should not fail the request, got %d", rr.Code)
 	}
-	if !strings.Contains(buf.String(), `"usage":"unparseable"`) {
-		t.Errorf("a malformed usage figure was not audited as unparseable: %s", buf.String())
+	// BL-20 amended this pin: a malformed figure is as unaccountable as a missing
+	// one, so it now takes the estimate path too. The real guarantee — a malformed
+	// figure must not FAIL the request, and must not be trusted as a real number —
+	// is unchanged; what changed is that the gateway charges an approximation instead
+	// of nothing.
+	if !strings.Contains(buf.String(), `"usage":"estimated"`) {
+		t.Errorf("a malformed usage figure was not audited as estimated: %s", buf.String())
+	}
+	if strings.Contains(buf.String(), `"usage":"unparseable"`) {
+		t.Errorf("BL-20: a malformed usage figure fell back to zero-cost accounting, "+
+			"which is the bypass: %s", buf.String())
+	}
+	toks, _ := gw.Limiter.Usage("test-key")
+	if toks <= 0 {
+		t.Errorf("BL-20 bypass: a malformed usage figure was charged %d tokens; a "+
+			"hostile upstream could send a non-numeric usage and pay nothing", toks)
 	}
 }

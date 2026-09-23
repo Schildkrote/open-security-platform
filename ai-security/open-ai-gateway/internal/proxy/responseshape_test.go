@@ -674,13 +674,31 @@ func TestNegativeUsageIsNotRecorded(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("a negative usage figure should not fail the request, got %d", rr.Code)
 	}
-	if toks != 0 {
+	// The real guarantee here is that a NEGATIVE usage figure is rejected rather than
+	// trusted — recording -5000 would credit the caller's budget, which is a bypass in
+	// the opposite direction. That guarantee is preserved.
+	//
+	// BL-20 amended the `toks != 0` assertion, which was itself the bypass: it required
+	// the rejected figure to be charged as ZERO, so a hostile upstream could send
+	// `"total_tokens": -5000` and get an unaccountable completion for free. Rejection
+	// must not mean "free". The figure is now charged as a positive estimate, so the
+	// budget still advances.
+	if toks < 0 {
 		t.Errorf("BUDGET BYPASS: a negative usage figure was recorded as %d, which would "+
 			"credit the caller's budget", toks)
 	}
-	if !strings.Contains(buf.String(), `"usage":"unparseable"`) {
-		t.Errorf("a rejected usage figure should be audited as unparseable: %s", buf.String())
+	if toks == 0 {
+		t.Errorf("BL-20 bypass: a rejected negative usage figure was charged nothing; a " +
+			"hostile upstream could send usage:-5000 and get a free completion")
 	}
+	if toks == -5000 {
+		t.Errorf("a negative usage figure was trusted verbatim: %d", toks)
+	}
+	if !strings.Contains(buf.String(), `"usage":"estimated"`) {
+		t.Errorf("a rejected usage figure should be audited as estimated, so the record "+
+			"does not claim a provider figure it never had: %s", buf.String())
+	}
+	t.Logf("rejected -5000 and charged %d estimated tokens instead", toks)
 }
 
 // ---------------------------------------------------------------------------
