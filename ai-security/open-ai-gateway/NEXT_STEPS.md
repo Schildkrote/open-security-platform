@@ -15,6 +15,18 @@ AI security control plane:
 
 ## Detection quality
 - Swap regex redaction for **NER models** (Presidio, GLiNER) for higher recall.
+  > **Blocking prerequisite: fix fail-open first.** `redactor.Presidio.Redact`
+  > returns the input unchanged on ANY error — a downed service, a non-2xx
+  > response, a decode failure — so PII transits upstream while the audit trail
+  > records no redactions. That is not a false record, but it means the gateway's
+  > core function can be silently off. The `Redactor` interface
+  > (`Redact(text) (string, []string)`) has no error channel, so "backend
+  > unreachable" is indistinguishable from "nothing sensitive". Wiring Presidio in
+  > therefore requires an interface change across every implementation, and the new
+  > backend must fail CLOSED like the response-shape guards do. This is latent
+  > rather than live today: the shipped binary only constructs `Regex{}`, which has
+  > no failure mode, and no config knob selects a backend. The moment one does,
+  > this becomes blocker-class for a PII-removal product.
 - Add **prompt-injection / jailbreak classifiers** to the policy engine.
 - **DLP dictionaries** and custom sensitive-data patterns per tenant.
 

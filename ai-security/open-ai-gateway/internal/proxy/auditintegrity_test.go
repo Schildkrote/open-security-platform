@@ -1,0 +1,479 @@
+package proxy
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"math"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// ---------------------------------------------------------------------------
+// BL-7 (regression introduced by the error-response exemption, found by the
+// round-3 review): on a non-2xx response with a MIXED shape, the walk redacted
+// the first choice, recorded resp:EMAIL on the audit event, then errored on the
+// second - and the caller served the ORIGINAL bytes. Result: raw PII to the
+// client under an audit line claiming it was redacted. A self-contradicting
+// trail is worse than a missing one.
+//
+// The reviewer's exact reproduction is used here: HTTP 429 with one readable
+// message carrying an email and one uninspectable choice.
+// ---------------------------------------------------------------------------
+
+// bl7MixedShape is the round-3 reviewer's exact reproduction: HTTP 429 carrying
+// one readable message with an email and one element in a shape the then-current
+// walker could not classify. The walker redacted the first, errored on the second,
+// and the caller served the ORIGINAL bytes under an audit line claiming a
+// redaction.
+//
+// The shape is retained verbatim as a regression fixture even though the sweep no
+// longer treats any part of it as unreadable: {"text":5} is now simply a number
+// that gets preserved. Keeping the original bytes means a future regression to
+// shape-enumeration fails against the exact input that exposed it.
+const bl7MixedShape = `{"choices":[` +
+	`{"message":{"role":"assistant","content":"jane.doe@example.com"}},` +
+	`{"text":5}` +
+	`]}`
+
+func serveStatusAndBody(t *testing.T, status int, body string) *httptest.Server {
+	t.Helper()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(up.Close)
+	return up
+}
+
+// auditClaimsRedaction reports whether an audit line asserts a redaction.
+func auditClaimsRedaction(audit string) bool {
+	return strings.Contains(audit, `"redactions":[`) && strings.Contains(audit, "resp:")
+}
+
+func TestBL7AuditNeverClaimsARedactionTheServedBodyDisproves(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+	}{
+		{"429 rate limited", http.StatusTooManyRequests},
+		{"500 upstream failure", http.StatusInternalServerError},
+		{"400 bad request", http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			up := serveStatusAndBody(t, tc.status, bl7MixedShape)
+			var buf bytes.Buffer
+			gw := newTestGateway(t, nil, &buf)
+			gw.UpstreamURL = up.URL
+
+			rr := post(t, gw, "gpt-4o", "hello")
+			client := rr.Body.String()
+			auditLine := buf.String()
+			t.Logf("status=%d client=%.220s", rr.Code, client)
+			t.Logf("audit=%.400s", auditLine)
+
+			// 1. The upstream status must survive: the diagnostic is the reason
+			//    error bodies are passed through at all.
+			if rr.Code != tc.status {
+				t.Errorf("upstream status %d was replaced by %d, destroying the diagnostic",
+					tc.status, rr.Code)
+			}
+
+			// 2. THE BL-7 INVARIANT: if the audit claims a redaction, the served
+			//    bytes must not contradict it.
+			if auditClaimsRedaction(auditLine) && strings.Contains(client, piiEmail) {
+				t.Errorf("SELF-CONTRADICTING AUDIT: the trail claims resp:EMAIL was redacted "+
+					"but the client received it raw: %s", client)
+			}
+
+			// 3. Raw PII must not be served on any status.
+			if strings.Contains(client, piiEmail) {
+				t.Errorf("LEAK: raw PII served to the client at status %d: %s", rr.Code, client)
+			}
+
+			// 4. The readable choice WAS redacted, so the marker should appear.
+			if !strings.Contains(client, "[REDACTED:EMAIL]") {
+				t.Errorf("the readable part of a mixed error response was not redacted: %s", client)
+			}
+
+			// 4b. THE OTHER HALF of the invariant. Asserting only that the audit
+			// does not over-claim leaves under-reporting uncaught: a mutation that
+			// deleted the kinds from the error path still served redacted bytes
+			// and still passed, while the trail silently lost the record that PII
+			// was removed. Both directions must hold.
+			if strings.Contains(client, "[REDACTED:EMAIL]") && !auditClaimsRedaction(auditLine) {
+				t.Errorf("UNDER-REPORTED: the client received redacted output but the audit "+
+					"records no redaction, so the trail loses the fact that PII was removed: %s",
+					auditLine)
+			}
+
+			// 5. With the total sweep there is no longer any uninspected portion,
+			//    so the skip diagnostic must NOT appear - asserting it would pin a
+			//    mechanism that no longer exists. What must appear instead is the
+			//    record of the redaction that really was applied (assertion 4b).
+			if strings.Contains(auditLine, "skipped_uninspectable_error_shape") {
+				t.Errorf("the sweep inspected every string, so nothing should be "+
+					"reported as skipped: %s", auditLine)
+			}
+
+			// 6. Content-Length must stay truthful after the re-encode.
+			if cl := rr.Header().Get("Content-Length"); cl != strconv.Itoa(rr.Body.Len()) {
+				t.Errorf("Content-Length=%q does not match the %d bytes written", cl, rr.Body.Len())
+			}
+		})
+	}
+}
+
+// The error body's diagnostic text must survive the re-encode - preserving the
+// status code alone would not be enough if the message were mangled.
+func TestBL7ErrorDiagnosticTextSurvives(t *testing.T) {
+	body := `{"error":{"message":"rate limited: 42 requests per minute exceeded","type":"rate_limit"},` +
+		`"choices":[{"message":{"role":"assistant","content":"jane.doe@example.com"}},{"text":5}]}`
+	up := serveStatusAndBody(t, http.StatusTooManyRequests, body)
+
+	var buf bytes.Buffer
+	gw := newTestGateway(t, nil, &buf)
+	gw.UpstreamURL = up.URL
+
+	rr := post(t, gw, "gpt-4o", "hello")
+	client := rr.Body.String()
+	t.Logf("status=%d client=%.300s", rr.Code, client)
+
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("status was not preserved: %d", rr.Code)
+	}
+	if !strings.Contains(client, "rate limited: 42 requests per minute exceeded") {
+		t.Errorf("the diagnostic message was lost: %s", client)
+	}
+	if !strings.Contains(client, "rate_limit") {
+		t.Errorf("the error type was lost: %s", client)
+	}
+	if strings.Contains(client, piiEmail) {
+		t.Errorf("LEAK: PII served raw alongside the diagnostic: %s", client)
+	}
+}
+
+// A fully-uninspectable ERROR response (no readable part at all) keeps its status
+// and body: there is nothing to redact, so nothing must be refused either.
+func TestBL7FullyUninspectableErrorKeepsStatus(t *testing.T) {
+	body := `{"error":{"message":"upstream exploded"},"choices":{"weird":true}}`
+	up := serveStatusAndBody(t, http.StatusBadGateway, body)
+
+	var buf bytes.Buffer
+	gw := newTestGateway(t, nil, &buf)
+	gw.UpstreamURL = up.URL
+
+	rr := post(t, gw, "gpt-4o", "hello")
+	t.Logf("status=%d body=%.200s audit=%.300s", rr.Code, rr.Body.String(), buf.String())
+
+	if rr.Code != http.StatusBadGateway {
+		t.Errorf("the upstream error status must pass through, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "upstream exploded") {
+		t.Errorf("the diagnostic was swallowed: %s", rr.Body.String())
+	}
+	if auditClaimsRedaction(buf.String()) {
+		t.Errorf("a redaction was claimed for a response where nothing was redacted: %s", buf.String())
+	}
+}
+
+// A MIXED 2xx must still fail closed - the exemption applies to errors only.
+// This pins that fixing BL-7 did not reopen BL-6.
+// TestBL7MixedShapeOn2xxIsRedactedNotRefused reverses what this test asserted in
+// the previous revision, deliberately and for a stated reason.
+//
+// It used to require 502: the walker could not classify {"text":5}, so the whole
+// response was refused. That was correct when refusing was the only way to avoid
+// serving uninspected bytes, but it turned one unclassifiable element into a
+// denial of service for an otherwise valid completion.
+//
+// The sweep reads every string regardless of container, so nothing is
+// uninspected and there is nothing left to fail closed on. The response is now
+// served at 200 with the email redacted and the numeric element preserved. The
+// invariant that actually matters - no PII egress - is unchanged and still
+// asserted; what changed is that the client gets an answer instead of an error.
+func TestBL7MixedShapeOn2xxIsRedactedNotRefused(t *testing.T) {
+	up := serveStatusAndBody(t, http.StatusOK, bl7MixedShape)
+
+	var buf bytes.Buffer
+	gw := newTestGateway(t, nil, &buf)
+	gw.UpstreamURL = up.URL
+
+	rr := post(t, gw, "gpt-4o", "hello")
+	client := rr.Body.String()
+	t.Logf("status=%d body=%.220s audit=%.300s", rr.Code, client, buf.String())
+
+	if strings.Contains(client, piiEmail) {
+		t.Errorf("LEAK: PII reached the client: %s", client)
+	}
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d; with nothing left uninspected the response should be "+
+			"served rather than refused", rr.Code)
+	}
+	if !strings.Contains(client, "[REDACTED:EMAIL]") {
+		t.Errorf("the email was not replaced by a redaction marker: %s", client)
+	}
+	// A redaction really happened, so the trail must say so.
+	if !auditClaimsRedaction(buf.String()) {
+		t.Errorf("UNDER-REPORTED: redacted output was served but the audit records "+
+			"no redaction: %s", buf.String())
+	}
+	// The non-sensitive element must survive: it is a number, not PII.
+	if !strings.Contains(client, `"text":5`) {
+		t.Errorf("a non-sensitive numeric element was destroyed: %s", client)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Genuine test gaps the round-3 mutation battery found (M20, M22, M27, M31,
+// M04c). Each guard already worked; none was pinned by a test, so deleting it
+// would have passed CI.
+// ---------------------------------------------------------------------------
+
+// M20: choices[].text as a non-string is an uninspectable shape, not something to
+// skip past.
+// TestResponseLegacyTextNonStringIsSwept covers choices[].text carrying a
+// non-string value. The previous revision refused these with 502 because the
+// walker's type switch had no case for them; the sweep needs no case, since a
+// number or bool simply is not a string and is passed through untouched, while a
+// nested object has its strings redacted in place.
+//
+// This is the M20 gap the round-3 battery found, now pinned by behaviour rather
+// than by status code.
+func TestResponseLegacyTextNonStringIsSwept(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body        string
+		wantPIIGone bool
+	}{
+		"number": {`{"choices":[{"index":0,"text":12345}],"usage":{"total_tokens":1}}`, false},
+		"bool":   {`{"choices":[{"index":0,"text":true}],"usage":{"total_tokens":1}}`, false},
+		"object": {`{"choices":[{"index":0,"text":{"a":"` + piiEmail + `"}}],"usage":{"total_tokens":1}}`, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			up := serveStatusAndBody(t, http.StatusOK, tc.body)
+			var buf bytes.Buffer
+			gw := newTestGateway(t, nil, &buf)
+			gw.UpstreamURL = up.URL
+
+			rr := post(t, gw, "gpt-4o", "hello")
+			client := rr.Body.String()
+			t.Logf("status=%d body=%.200s", rr.Code, client)
+
+			if strings.Contains(client, piiEmail) {
+				t.Errorf("LEAK: %s", client)
+			}
+			if rr.Code != http.StatusOK {
+				t.Errorf("status = %d; a swept response should be served, not refused", rr.Code)
+			}
+			if tc.wantPIIGone && !strings.Contains(client, "[REDACTED:EMAIL]") {
+				t.Errorf("PII was not replaced by a marker: %s", client)
+			}
+			if !tc.wantPIIGone && !strings.Contains(client, "12345") && !strings.Contains(client, "true") {
+				t.Errorf("a non-sensitive value was destroyed: %s", client)
+			}
+		})
+	}
+}
+
+// M04c: the BL-5 refusal must write an audit event, and it must say the request
+// was REFUSED. An allow-default config previously logged action:"allow" for a
+// request that returned 400, which reads as a successful forward.
+func TestShapeRefusalIsAuditedAsDenied(t *testing.T) {
+	up := serveStatusAndBody(t, http.StatusOK, okJSONResponse)
+	var buf bytes.Buffer
+	gw := newTestGateway(t, nil, &buf)
+	gw.UpstreamURL = up.URL
+
+	raw, _ := json.Marshal(map[string]any{
+		"model":    "gpt-4o",
+		"messages": map[string]any{"role": "user", "content": "hi " + piiEmail},
+	})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(raw))
+	req.Header.Set("X-API-Key", longSecretKey)
+	gw.ServeHTTP(rr, req)
+
+	auditLine := buf.String()
+	t.Logf("status=%d audit=%.300s", rr.Code, auditLine)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected a 400 refusal, got %d", rr.Code)
+	}
+	if auditLine == "" {
+		t.Fatal("AUDIT HOLE: a refused request wrote no event at all")
+	}
+	if !strings.Contains(auditLine, `"action":"denied"`) {
+		t.Errorf("a refused request was audited as something other than denied, "+
+			"which reads as a successful forward: %s", auditLine)
+	}
+	if strings.Contains(auditLine, longSecretKey) {
+		t.Errorf("LEAK: raw API key in the audit log: %s", auditLine)
+	}
+}
+
+// M27: the short-key branch of maskKey. Keys of length <= 4 must not be returned
+// raw - a short key is still a credential.
+func TestMaskKeyShortKeysAreNotReturnedRaw(t *testing.T) {
+	for _, k := range []string{"", "a", "ab", "abc", "abcd"} {
+		got := maskKey(k)
+		t.Logf("maskKey(%q) = %q", k, got)
+		if got == k && k != "" {
+			t.Errorf("a short key was returned unmasked: %q", got)
+		}
+		if strings.Contains(got, k) && k != "" {
+			t.Errorf("a short key is recoverable from its mask: %q", got)
+		}
+	}
+	// And the long-key branch keeps its 4-char prefix contract.
+	long := maskKey(longSecretKey)
+	if !strings.HasPrefix(long, "sk-l") {
+		t.Errorf("expected the 4-char prefix to be kept, got %q", long)
+	}
+	if strings.Contains(long, longSecretKey) {
+		t.Errorf("the full key survived masking: %q", long)
+	}
+}
+
+// M31: key masking must hold on the early-return paths that the earlier test did
+// not cover - request-too-large, upstream read error, response-too-large and the
+// panic recovery.
+func TestAuditMasksKeyOnTheRemainingEarlyReturnPaths(t *testing.T) {
+	t.Run("request too large", func(t *testing.T) {
+		up := serveStatusAndBody(t, http.StatusOK, okJSONResponse)
+		var buf bytes.Buffer
+		gw := newTestGateway(t, nil, &buf)
+		gw.UpstreamURL = up.URL
+
+		raw, _ := json.Marshal(map[string]any{
+			"model":    "m",
+			"messages": []map[string]string{{"role": "user", "content": strings.Repeat("a", maxBodyBytes)}},
+		})
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(raw))
+		req.Header.Set("X-API-Key", longSecretKey)
+		gw.ServeHTTP(rr, req)
+
+		t.Logf("status=%d audit=%.240s", rr.Code, buf.String())
+		if rr.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("expected 413, got %d", rr.Code)
+		}
+		if strings.Contains(buf.String(), longSecretKey) {
+			t.Errorf("LEAK: raw key on the 413 path: %s", buf.String())
+		}
+	})
+
+	t.Run("response too large", func(t *testing.T) {
+		big := strings.Repeat("a", maxBodyBytes+1)
+		up := serveStatusAndBody(t, http.StatusOK,
+			`{"choices":[{"message":{"content":"`+big+`"}}]}`)
+		var buf bytes.Buffer
+		gw := newTestGateway(t, nil, &buf)
+		gw.UpstreamURL = up.URL
+
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+			strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+		req.Header.Set("X-API-Key", longSecretKey)
+		gw.ServeHTTP(rr, req)
+
+		t.Logf("status=%d audit=%.240s", rr.Code, buf.String())
+		if rr.Code != http.StatusBadGateway {
+			t.Fatalf("expected 502, got %d", rr.Code)
+		}
+		if strings.Contains(buf.String(), longSecretKey) {
+			t.Errorf("LEAK: raw key on the response-too-large path: %s", buf.String())
+		}
+	})
+
+	t.Run("panicking redactor", func(t *testing.T) {
+		up := serveStatusAndBody(t, http.StatusOK, okJSONResponse)
+		var buf bytes.Buffer
+		gw := newTestGateway(t, nil, &buf)
+		gw.UpstreamURL = up.URL
+		gw.Redactor = panickingRedactor{}
+
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+			strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+		req.Header.Set("X-API-Key", longSecretKey)
+		gw.ServeHTTP(rr, req)
+
+		t.Logf("status=%d audit=%.240s", rr.Code, buf.String())
+		if strings.Contains(buf.String(), longSecretKey) {
+			t.Errorf("LEAK: raw key on the panic path: %s", buf.String())
+		}
+		// The panic event must be identifiable and attributed. It is the only
+		// record that a request was processed and the redactor blew up mid-flight,
+		// so dropping either field makes an incident untraceable.
+		if !strings.Contains(buf.String(), `"rule":"handler-panic"`) {
+			t.Errorf("the panic event lost its rule name: %s", buf.String())
+		}
+		if !strings.Contains(buf.String(), `"api_key"`) {
+			t.Errorf("UNATTRIBUTED: the panic event names no caller, so the one "+
+				"record a misbehaving Redactor produces cannot be traced: %s", buf.String())
+		}
+		if rr.Code != http.StatusInternalServerError {
+			t.Errorf("a recovered panic should answer 500, got %d", rr.Code)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// marshalMap's error path. HONEST CAVEAT, same class as the M7 finding recorded
+// earlier on this branch: this branch is UNREACHABLE via ServeHTTP. `parsed`
+// comes from json.Unmarshal, so every value in it is one of float64 / string /
+// bool / nil / map[string]any / []any, and all of those marshal cleanly. Nothing
+// a client or an upstream sends can make json.Marshal fail on that map.
+//
+// The guard is defensive depth: it exists so that if a future change lets a
+// non-marshalable value into parsed (a redactor returning a channel, a NaN from
+// arithmetic, a typed nil interface), the failure is loud rather than serving
+// unredacted bytes. Pinned at FUNCTION level here so the guard is not silently
+// deletable, with the reachability limit stated rather than glossed.
+//
+// The unreachability was VERIFIED rather than assumed, because "defensive code
+// nothing can reach" is exactly the shape of a claim that hides a real hole:
+//   - encoding/json REJECTS the NaN / Infinity / -Infinity literals at decode
+//     time ("invalid character 'N' looking for beginning of value"), so upstream
+//     JSON cannot introduce them.
+//   - it also REJECTS numbers that would overflow float64 ("cannot unmarshal
+//     number 1e400 into Go value of type float64"), so no literal can decode to
+//     an Inf either. 1e308 decodes fine and re-marshals fine.
+//   - the Redactor interface returns (string, []string) and the result is stored
+//     back into a string field, so a redactor cannot inject a non-marshalable
+//     value.
+//
+// What remains reachable is a FUTURE change: decoding into a typed struct with a
+// float that arithmetic then sets to NaN, or a redactor interface that grows a
+// non-string return. That is what this guard is for.
+//
+// Mutation B5 ("if marshalErr != nil" -> "&& false") SURVIVED the suite, which is
+// exactly what an unreachable branch does. This test converts that survivor from
+// a blind spot into a documented one.
+// ---------------------------------------------------------------------------
+
+func TestMarshalMapFailsLoudlyOnNonMarshalableValue(t *testing.T) {
+	// A value json.Unmarshal can never produce, but json.Marshal rejects.
+	bad := map[string]any{"choices": []any{math.NaN()}}
+
+	_, err := marshalMap(bad)
+	if err == nil {
+		t.Fatal("marshalMap swallowed a non-marshalable value; the caller's " +
+			"fail-closed guard depends on this error being returned")
+	}
+	t.Logf("marshalMap correctly failed: %v", err)
+
+	// And the normal path must succeed, so the error is not unconditional.
+	good := map[string]any{"choices": []any{map[string]any{"text": "hi"}}}
+	out, err := marshalMap(good)
+	if err != nil {
+		t.Fatalf("marshalMap failed on a plain unmarshal-shaped map: %v", err)
+	}
+	if !strings.Contains(string(out), `"text":"hi"`) {
+		t.Errorf("marshalMap mangled a valid map: %s", out)
+	}
+}
