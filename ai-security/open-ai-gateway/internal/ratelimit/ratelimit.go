@@ -69,6 +69,40 @@ func (l *Limiter) RecordUsage(key string, tokens int64) bool {
 	return true
 }
 
+// HasBudget reports whether ANY cumulative budget (tokens or dollars) is
+// configured for this limiter. It exists so callers can distinguish "no budget
+// was configured, so nothing can be exceeded" from "a budget was configured and
+// this response could not be accounted against it". Collapsing those two cases
+// is what made token-budget enforcement decorative: an unaccountable completion
+// served under an active budget is a bypass, while the same completion served
+// under no budget is simply unthrottled by design.
+func (l *Limiter) HasBudget() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.limits.BudgetTokens > 0 || l.limits.BudgetDollars > 0
+}
+
+// OverBudget reports whether a key has already exhausted a configured cumulative
+// budget. It exists so the gateway can deny BEFORE forwarding a request upstream,
+// rather than only discovering the overage after the tokens have been spent.
+// Returns false when no budget is configured, because there is then nothing to
+// exceed - that is a deliberate configuration, not a failure to enforce.
+func (l *Limiter) OverBudget(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b := l.buckets[key]
+	if b == nil {
+		return false
+	}
+	if l.limits.BudgetTokens > 0 && b.tokens >= l.limits.BudgetTokens {
+		return true
+	}
+	if l.limits.BudgetDollars > 0 && b.dollars >= l.limits.BudgetDollars {
+		return true
+	}
+	return false
+}
+
 // Usage returns cumulative token and dollar usage for a key.
 func (l *Limiter) Usage(key string) (tokens int64, dollars float64) {
 	l.mu.Lock()
