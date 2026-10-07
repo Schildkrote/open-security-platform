@@ -49,3 +49,19 @@ func TestHelpTextHasNoArgvKeyFlag(t *testing.T) {
 		}
 	}
 }
+
+// AP-2: the live Shodan source must be gated behind --live active-scanning
+// (enforcement lives in main.go: liveGateError).
+
+func TestLiveShodanSourceRequiresGate(t *testing.T) {
+	if err := liveGateError(nil, "shodan"); err == nil {
+		t.Fatal("live source must be rejected without --live active-scanning (AP-2)")
+	}
+	if err := liveGateError([]string{"active-scanning"}, "shodan"); err != nil {
+		t.Fatalf("live source with gate enabled should pass: %v", err)
+	}
+	// Mock path stays fully offline and ungated (default unchanged).
+	if err := liveGateError(nil, "mock"); err != nil {
+		t.Fatalf("mock source must not require a gate: %v", err)
+	}
+}
