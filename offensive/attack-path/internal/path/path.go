@@ -8,6 +8,10 @@ import (
 	"github.com/Schildkrote/attack-path/internal/graph"
 )
 
+// maxResults bounds total enumeration output (AP-5): a hostile/huge scenario
+// can otherwise produce combinatorial path counts that exhaust memory.
+const maxResults = 10000
+
 // Path is a single attack path through the graph.
 type Path struct {
 	Nodes []string `json:"nodes"`
@@ -36,6 +40,9 @@ func FindPaths(g *graph.Graph, maxDepth int) []Path {
 
 	var dfs func(nodeID string, nodes []string, edges []string, risk float64)
 	dfs = func(nodeID string, nodes []string, edges []string, risk float64) {
+		if len(results) >= maxResults {
+			return // result cap (AP-5): stop enumerating
+		}
 		if critical[nodeID] && len(nodes) > 1 {
 			results = append(results, Path{
 				Nodes: append([]string(nil), nodes...),

@@ -1,6 +1,7 @@
 package path
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/Schildkrote/attack-path/internal/graph"
@@ -71,5 +72,36 @@ func TestCycleDoesNotHang(t *testing.T) {
 	paths := FindPaths(g, 10)
 	if len(paths) == 0 {
 		t.Fatal("expected at least one path despite cycle")
+	}
+}
+
+// AP-5: enumeration is capped at maxResults so a hostile/huge scenario cannot
+// exhaust memory with combinatorial path counts.
+func TestEnumerationCapped(t *testing.T) {
+	g := graph.New()
+	g.AddNode(graph.Node{ID: "in", Type: graph.TypeExposure, Exposure: true})
+	// A diamond per level: combinatorially many paths, well beyond maxResults
+	// for the given depth.
+	levels := 20
+	for i := 0; i < levels; i++ {
+		a, b, m := fmt.Sprintf("a%d", i), fmt.Sprintf("b%d", i), fmt.Sprintf("m%d", i)
+		prev := "in"
+		if i > 0 {
+			prev = fmt.Sprintf("m%d", i-1)
+		}
+		g.AddEdge(graph.Edge{From: prev, To: a, Weight: 0.5})
+		g.AddEdge(graph.Edge{From: prev, To: b, Weight: 0.5})
+		g.AddEdge(graph.Edge{From: a, To: m, Weight: 0.5})
+		g.AddEdge(graph.Edge{From: b, To: m, Weight: 0.5})
+	}
+	g.AddNode(graph.Node{ID: "goal", Type: graph.TypeCritical, Critical: true})
+	g.AddEdge(graph.Edge{From: fmt.Sprintf("m%d", levels-1), To: "goal", Weight: 1.0})
+
+	paths := FindPaths(g, 100)
+	if len(paths) > maxResults {
+		t.Fatalf("enumeration exceeded cap: %d > %d", len(paths), maxResults)
+	}
+	if len(paths) == 0 {
+		t.Fatal("expected some paths")
 	}
 }
