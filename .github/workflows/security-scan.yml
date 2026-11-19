@@ -36,7 +36,7 @@ jobs:
           - platform
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           # A floor, not an exact pin. Each module's go.mod now carries
           # `toolchain go1.26.6`, patched against the GO-2026-6218 (net/url),
